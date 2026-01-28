@@ -1,18 +1,19 @@
 const { getMongoDB } = require('../../config/database');
 
 class PaperDocument {
-  constructor() {
+  // Use lazy initialization - don't try to get collection in constructor
+  getCollection() {
     try {
-      this.collection = getMongoDB().collection('papers');
+      const db = getMongoDB();
+      return db.collection('papers');
     } catch (error) {
-      console.error('MongoDB not available:', error.message);
-      this.collection = null;
+      throw new Error('MongoDB not available: ' + error.message);
     }
   }
 
   // Create paper document matching your schema
   async create(paper) {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     // Ensure all required fields from your schema
     const paperDoc = {
@@ -34,29 +35,29 @@ class PaperDocument {
       ...(paper.updated_at && { updated_at: paper.updated_at })
     };
     
-    const result = await this.collection.insertOne(paperDoc);
+    const result = await collection.insertOne(paperDoc);
     return result;
   }
 
   // Get all paper documents
   async findAll(limit = 100, skip = 0) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    const cursor = this.collection.find().sort({ year: -1 }).skip(skip).limit(limit);
+    const collection = this.getCollection();
+    const cursor = collection.find().sort({ year: -1 }).skip(skip).limit(limit);
     return cursor.toArray();
   }
 
   // Get paper by ID
   async findById(paper_id) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    return this.collection.findOne({ paper_id: paper_id });
+    const collection = this.getCollection();
+    return collection.findOne({ paper_id: paper_id });
   }
 
   // Search papers by text (using MongoDB text index)
   async searchText(query, limit = 50) {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     try {
-      const cursor = this.collection.find(
+      const cursor = collection.find(
         { $text: { $search: query } },
         { score: { $meta: "textScore" } }
       ).sort({ score: { $meta: "textScore" } }).limit(limit);
@@ -64,7 +65,7 @@ class PaperDocument {
     } catch (error) {
       // Fallback to regex search if text index is not available
       console.log('Text search failed, falling back to regex:', error.message);
-      const cursor = this.collection.find({
+      const cursor = collection.find({
         $or: [
           { title: { $regex: query, $options: 'i' } },
           { abstract: { $regex: query, $options: 'i' } }
@@ -76,35 +77,35 @@ class PaperDocument {
 
   // Get papers by year
   async getByYear(year) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    const cursor = this.collection.find({ year: parseInt(year) }).sort({ title: 1 });
+    const collection = this.getCollection();
+    const cursor = collection.find({ year: parseInt(year) }).sort({ title: 1 });
     return cursor.toArray();
   }
 
   // Get papers by journal
   async getByJournal(journal) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    const cursor = this.collection.find({ journal: journal }).sort({ year: -1 });
+    const collection = this.getCollection();
+    const cursor = collection.find({ journal: journal }).sort({ year: -1 });
     return cursor.toArray();
   }
 
   // Get papers by author
   async getByAuthor(authorName) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    const cursor = this.collection.find({ authors: authorName }).sort({ year: -1 });
+    const collection = this.getCollection();
+    const cursor = collection.find({ authors: authorName }).sort({ year: -1 });
     return cursor.toArray();
   }
 
   // Get papers by COVID-19 flag
   async getCovid19Papers(limit = 50) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    const cursor = this.collection.find({ is_covid19: true }).sort({ year: -1 }).limit(limit);
+    const collection = this.getCollection();
+    const cursor = collection.find({ is_covid19: true }).sort({ year: -1 }).limit(limit);
     return cursor.toArray();
   }
 
   // Get aggregated statistics
   async getStats() {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     const pipeline = [
       {
@@ -133,7 +134,7 @@ class PaperDocument {
       }
     ];
     
-    const result = await this.collection.aggregate(pipeline).toArray();
+    const result = await collection.aggregate(pipeline).toArray();
     const stats = result[0] || {};
     
     return {
@@ -148,7 +149,7 @@ class PaperDocument {
 
   // Get papers per year
   async getPapersPerYear() {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     const pipeline = [
       {
@@ -162,12 +163,12 @@ class PaperDocument {
         $sort: { _id: 1 }
       }
     ];
-    return this.collection.aggregate(pipeline).toArray();
+    return collection.aggregate(pipeline).toArray();
   }
 
   // Get top journals
   async getTopJournals(limit = 10) {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     const pipeline = [
       {
@@ -191,12 +192,12 @@ class PaperDocument {
         }
       }
     ];
-    return this.collection.aggregate(pipeline).toArray();
+    return collection.aggregate(pipeline).toArray();
   }
 
   // Get top authors
   async getTopAuthors(limit = 10) {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     const pipeline = [
       {
@@ -232,18 +233,18 @@ class PaperDocument {
         }
       }
     ];
-    return this.collection.aggregate(pipeline).toArray();
+    return collection.aggregate(pipeline).toArray();
   }
 
   // Get distinct values for a field
   async getDistinct(field) {
-    if (!this.collection) throw new Error('MongoDB not available');
-    return this.collection.distinct(field);
+    const collection = this.getCollection();
+    return collection.distinct(field);
   }
 
   // Get COVID-19 research statistics
   async getCovid19Stats() {
-    if (!this.collection) throw new Error('MongoDB not available');
+    const collection = this.getCollection();
     
     const pipeline = [
       {
@@ -283,7 +284,7 @@ class PaperDocument {
       }
     ];
     
-    const result = await this.collection.aggregate(pipeline).toArray();
+    const result = await collection.aggregate(pipeline).toArray();
     return result[0] || {};
   }
 }
