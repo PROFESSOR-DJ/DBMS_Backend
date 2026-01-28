@@ -63,13 +63,14 @@ const getOverview = async (req, res) => {
 
 const getAuthorStats = async (req, res) => {
   try {
-    const { source = 'mongodb', limit = 50 } = req.query;
+    const { source = 'mongodb' } = req.query;
+    const limit = parseInt(req.query.limit, 10) || 50; // FIX: Parse as integer
 
     let authors;
     if (source === 'mysql') {
-      authors = await AuthorModel.getTopAuthors(parseInt(limit));
+      authors = await AuthorModel.getTopAuthors(limit);
     } else {
-      authors = await paperDocument.getTopAuthors(parseInt(limit));
+      authors = await paperDocument.getTopAuthors(limit);
     }
 
     res.json({
@@ -89,7 +90,8 @@ const getAuthorStats = async (req, res) => {
 
 const getJournalStats = async (req, res) => {
   try {
-    const { source = 'mongodb', limit = 50 } = req.query;
+    const { source = 'mongodb' } = req.query;
+    const limit = parseInt(req.query.limit, 10) || 50; // FIX: Parse as integer
 
     let journals;
     if (source === 'mysql') {
@@ -104,7 +106,7 @@ const getJournalStats = async (req, res) => {
       const [rows] = await (await require('../config/database').getMySQL()).execute(query, [limit]);
       journals = rows;
     } else {
-      journals = await paperDocument.getTopJournals(parseInt(limit));
+      journals = await paperDocument.getTopJournals(limit);
     }
 
     res.json({

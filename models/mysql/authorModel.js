@@ -9,10 +9,12 @@ class AuthorModel {
     return result;
   }
 
-  // Get all authors
+  // Get all authors - FIX: Convert limit and offset to integers
   static async findAll(limit = 100, offset = 0) {
     const query = 'SELECT * FROM author ORDER BY name LIMIT ? OFFSET ?';
-    const [rows] = await (await getMySQL()).execute(query, [limit, offset]);
+    const limitInt = parseInt(limit, 10);
+    const offsetInt = parseInt(offset, 10);
+    const [rows] = await (await getMySQL()).execute(query, [limitInt, offsetInt]);
     return rows;
   }
 
@@ -30,14 +32,15 @@ class AuthorModel {
     return rows[0];
   }
 
-  // Search authors by name
+  // Search authors by name - FIX: Convert limit to integer
   static async searchByName(name, limit = 50) {
     const query = 'SELECT * FROM author WHERE name LIKE ? ORDER BY name LIMIT ?';
-    const [rows] = await (await getMySQL()).execute(query, [`%${name}%`, limit]);
+    const limitInt = parseInt(limit, 10);
+    const [rows] = await (await getMySQL()).execute(query, [`%${name}%`, limitInt]);
     return rows;
   }
 
-  // Get top authors by paper count
+  // Get top authors by paper count - FIX: Convert limit to integer
   static async getTopAuthors(limit = 10) {
     const query = `
       SELECT a.author_id, a.name, COUNT(pa.paper_id) as paper_count
@@ -47,7 +50,8 @@ class AuthorModel {
       ORDER BY paper_count DESC
       LIMIT ?
     `;
-    const [rows] = await (await getMySQL()).execute(query, [limit]);
+    const limitInt = parseInt(limit, 10);
+    const [rows] = await (await getMySQL()).execute(query, [limitInt]);
     return rows;
   }
 
