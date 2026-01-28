@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "description": "Hybrid Database Backend for Research DBMS Project",
   "main": "server.js",
+  
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
     "init-db": "node scripts/initDatabases.js",
     "seed": "node scripts/seedData.js",
-    "sync": "node scripts/syncData.js"
+    "add-sample": "node scripts/addSampleData.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -24,5 +25,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
