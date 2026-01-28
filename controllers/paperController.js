@@ -7,17 +7,20 @@ const paperDocument = new PaperDocument();
 
 const getAllPapers = async (req, res) => {
   try {
-    const { limit = 50, page = 1, source = 'mongodb' } = req.query;
+    // FIX: Explicitly parse query parameters as integers
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const page = parseInt(req.query.page, 10) || 1;
     const offset = (page - 1) * limit;
+    const source = req.query.source || 'mongodb';
 
     let papers;
     let total;
 
     if (source === 'mysql') {
-      papers = await PaperModel.findAll(parseInt(limit), parseInt(offset));
+      papers = await PaperModel.findAll(limit, offset);
       total = await PaperModel.count();
     } else {
-      papers = await paperDocument.findAll(parseInt(limit), parseInt(offset));
+      papers = await paperDocument.findAll(limit, offset);
       const stats = await paperDocument.getStats();
       total = stats.totalPapers || 0;
     }
@@ -25,8 +28,8 @@ const getAllPapers = async (req, res) => {
     res.json({
       papers,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: page,
+        limit: limit,
         total,
         pages: Math.ceil(total / limit)
       },
@@ -73,15 +76,15 @@ const getPaperById = async (req, res) => {
 const searchPapers = async (req, res) => {
   try {
     const { q, year, journal, author, source = 'mongodb' } = req.query;
-    const { limit = 50 } = req.query;
+    const limit = parseInt(req.query.limit, 10) || 50;
 
     let papers;
 
     if (source === 'mysql') {
       if (q) {
-        papers = await PaperModel.searchByTitle(q, parseInt(limit));
+        papers = await PaperModel.searchByTitle(q, limit);
       } else if (year) {
-        papers = await PaperModel.getByYear(parseInt(year));
+        papers = await PaperModel.getByYear(parseInt(year, 10));
       } else if (journal) {
         papers = await PaperModel.getByJournal(journal);
       } else if (author) {
@@ -93,19 +96,19 @@ const searchPapers = async (req, res) => {
           papers = [];
         }
       } else {
-        papers = await PaperModel.findAll(parseInt(limit), 0);
+        papers = await PaperModel.findAll(limit, 0);
       }
     } else {
       if (q) {
-        papers = await paperDocument.searchText(q, parseInt(limit));
+        papers = await paperDocument.searchText(q, limit);
       } else if (year) {
-        papers = await paperDocument.getByYear(parseInt(year));
+        papers = await paperDocument.getByYear(parseInt(year, 10));
       } else if (journal) {
         papers = await paperDocument.getByJournal(journal);
       } else if (author) {
         papers = await paperDocument.getByAuthor(author);
       } else {
-        papers = await paperDocument.findAll(parseInt(limit), 0);
+        papers = await paperDocument.findAll(limit, 0);
       }
     }
 
@@ -128,9 +131,9 @@ const getPapersByYear = async (req, res) => {
 
     let papers;
     if (source === 'mysql') {
-      papers = await PaperModel.getByYear(parseInt(year));
+      papers = await PaperModel.getByYear(parseInt(year, 10));
     } else {
-      papers = await paperDocument.getByYear(parseInt(year));
+      papers = await paperDocument.getByYear(parseInt(year, 10));
     }
 
     res.json({

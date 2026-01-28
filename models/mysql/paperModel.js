@@ -9,10 +9,13 @@ class PaperModel {
     return result;
   }
 
-  // Get all papers
+  // Get all papers - FIX: Convert limit and offset to integers
   static async findAll(limit = 100, offset = 0) {
     const query = 'SELECT * FROM paper ORDER BY year DESC LIMIT ? OFFSET ?';
-    const [rows] = await (await getMySQL()).execute(query, [limit, offset]);
+    // Ensure parameters are integers
+    const limitInt = parseInt(limit, 10);
+    const offsetInt = parseInt(offset, 10);
+    const [rows] = await (await getMySQL()).execute(query, [limitInt, offsetInt]);
     return rows;
   }
 
@@ -23,10 +26,11 @@ class PaperModel {
     return rows[0];
   }
 
-  // Search papers by title
+  // Search papers by title - FIX: Convert limit to integer
   static async searchByTitle(title, limit = 50) {
     const query = 'SELECT * FROM paper WHERE title LIKE ? ORDER BY year DESC LIMIT ?';
-    const [rows] = await (await getMySQL()).execute(query, [`%${title}%`, limit]);
+    const limitInt = parseInt(limit, 10);
+    const [rows] = await (await getMySQL()).execute(query, [`%${title}%`, limitInt]);
     return rows;
   }
 
