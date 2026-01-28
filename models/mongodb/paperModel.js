@@ -2,29 +2,36 @@ const { getMongoDB } = require('../../config/database');
 
 class PaperDocument {
   constructor() {
-    this.collection = getMongoDB().collection('papers');
+    try {
+      this.collection = getMongoDB().collection('papers');
+    } catch (error) {
+      console.error('MongoDB not available:', error.message);
+      this.collection = null;
+    }
   }
 
   // Create paper document matching your schema
   async create(paper) {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     // Ensure all required fields from your schema
     const paperDoc = {
       paper_id: paper.paper_id || `paper_${Date.now()}`,
       title: paper.title || '',
       abstract: paper.abstract || '',
-      authors: paper.authors || [],
+      authors: Array.isArray(paper.authors) ? paper.authors : [],
       doi: paper.doi || '',
-      has_full_text: paper.has_full_text || false,
-      is_covid19: paper.is_covid19 || false,
+      has_full_text: Boolean(paper.has_full_text),
+      is_covid19: Boolean(paper.is_covid19),
       journal: paper.journal || '',
       sha: paper.sha || '',
       source: paper.source || 'manual',
-      year: paper.year || new Date().getFullYear(),
-      created_at: new Date(),
-      updated_at: new Date(),
-      // Optional fields that might exist
-      citation_count: paper.citation_count || 0,
-      keywords: paper.keywords || []
+      year: typeof paper.year === 'number' ? paper.year : new Date().getFullYear(),
+      // Optional fields
+      ...(paper.citation_count && { citation_count: paper.citation_count }),
+      ...(paper.keywords && { keywords: paper.keywords }),
+      ...(paper.created_at && { created_at: paper.created_at }),
+      ...(paper.updated_at && { updated_at: paper.updated_at })
     };
     
     const result = await this.collection.insertOne(paperDoc);
@@ -33,17 +40,21 @@ class PaperDocument {
 
   // Get all paper documents
   async findAll(limit = 100, skip = 0) {
+    if (!this.collection) throw new Error('MongoDB not available');
     const cursor = this.collection.find().sort({ year: -1 }).skip(skip).limit(limit);
     return cursor.toArray();
   }
 
   // Get paper by ID
   async findById(paper_id) {
+    if (!this.collection) throw new Error('MongoDB not available');
     return this.collection.findOne({ paper_id: paper_id });
   }
 
   // Search papers by text (using MongoDB text index)
   async searchText(query, limit = 50) {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     try {
       const cursor = this.collection.find(
         { $text: { $search: query } },
@@ -65,30 +76,36 @@ class PaperDocument {
 
   // Get papers by year
   async getByYear(year) {
+    if (!this.collection) throw new Error('MongoDB not available');
     const cursor = this.collection.find({ year: parseInt(year) }).sort({ title: 1 });
     return cursor.toArray();
   }
 
   // Get papers by journal
   async getByJournal(journal) {
+    if (!this.collection) throw new Error('MongoDB not available');
     const cursor = this.collection.find({ journal: journal }).sort({ year: -1 });
     return cursor.toArray();
   }
 
   // Get papers by author
   async getByAuthor(authorName) {
+    if (!this.collection) throw new Error('MongoDB not available');
     const cursor = this.collection.find({ authors: authorName }).sort({ year: -1 });
     return cursor.toArray();
   }
 
   // Get papers by COVID-19 flag
   async getCovid19Papers(limit = 50) {
+    if (!this.collection) throw new Error('MongoDB not available');
     const cursor = this.collection.find({ is_covid19: true }).sort({ year: -1 }).limit(limit);
     return cursor.toArray();
   }
 
   // Get aggregated statistics
   async getStats() {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     const pipeline = [
       {
         $facet: {
@@ -99,39 +116,18 @@ class PaperDocument {
                 totalPapers: { $sum: 1 },
                 covid19Papers: { $sum: { $cond: ["$is_covid19", 1, 0] } },
                 papersWithFullText: { $sum: { $cond: ["$has_full_text", 1, 0] } },
-                avgCitationCount: { $avg: "$citation_count" }
+                avgCitationCount: { $avg: { $ifNull: ["$citation_count", 0] } }
               }
             }
           ],
-          yearStats: [
-            {
-              $group: {
-                _id: "$year",
-                count: { $sum: 1 }
-              }
-            },
-            { $sort: { _id: 1 } }
+          uniqueJournals: [
+            { $group: { _id: "$journal" } },
+            { $count: "count" }
           ],
-          journalStats: [
-            {
-              $group: {
-                _id: "$journal",
-                count: { $sum: 1 }
-              }
-            },
-            { $sort: { count: -1 } },
-            { $limit: 10 }
-          ],
-          authorStats: [
+          uniqueAuthors: [
             { $unwind: "$authors" },
-            {
-              $group: {
-                _id: "$authors",
-                count: { $sum: 1 }
-              }
-            },
-            { $sort: { count: -1 } },
-            { $limit: 10 }
+            { $group: { _id: "$authors" } },
+            { $count: "count" }
           ]
         }
       }
@@ -144,15 +140,16 @@ class PaperDocument {
       totalPapers: stats.totalStats?.[0]?.totalPapers || 0,
       covid19Papers: stats.totalStats?.[0]?.covid19Papers || 0,
       papersWithFullText: stats.totalStats?.[0]?.papersWithFullText || 0,
-      avgCitationCount: stats.totalStats?.[0]?.avgCitationCount || 0,
-      papersPerYear: stats.yearStats || [],
-      topJournals: stats.journalStats || [],
-      topAuthors: stats.authorStats || []
+      avgCitations: Math.round((stats.totalStats?.[0]?.avgCitationCount || 0) * 100) / 100,
+      uniqueJournalCount: stats.uniqueJournals?.[0]?.count || 0,
+      uniqueAuthorCount: stats.uniqueAuthors?.[0]?.count || 0
     };
   }
 
   // Get papers per year
   async getPapersPerYear() {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     const pipeline = [
       {
         $group: {
@@ -170,12 +167,14 @@ class PaperDocument {
 
   // Get top journals
   async getTopJournals(limit = 10) {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     const pipeline = [
       {
         $group: {
           _id: "$journal",
           count: { $sum: 1 },
-          avgCitations: { $avg: "$citation_count" }
+          avgCitations: { $avg: { $ifNull: ["$citation_count", 0] } }
         }
       },
       {
@@ -197,6 +196,8 @@ class PaperDocument {
 
   // Get top authors
   async getTopAuthors(limit = 10) {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     const pipeline = [
       {
         $unwind: "$authors"
@@ -205,7 +206,7 @@ class PaperDocument {
         $group: {
           _id: "$authors",
           count: { $sum: 1 },
-          totalCitations: { $sum: "$citation_count" }
+          totalCitations: { $sum: { $ifNull: ["$citation_count", 0] } }
         }
       },
       {
@@ -218,7 +219,16 @@ class PaperDocument {
         $project: {
           author: "$_id",
           count: 1,
-          avgCitations: { $round: [{ $divide: ["$totalCitations", "$count"] }, 2] }
+          avgCitations: { 
+            $round: [
+              { $cond: [
+                { $eq: ["$count", 0] },
+                0,
+                { $divide: ["$totalCitations", "$count"] }
+              ]},
+              2
+            ]
+          }
         }
       }
     ];
@@ -227,11 +237,14 @@ class PaperDocument {
 
   // Get distinct values for a field
   async getDistinct(field) {
+    if (!this.collection) throw new Error('MongoDB not available');
     return this.collection.distinct(field);
   }
 
   // Get COVID-19 research statistics
   async getCovid19Stats() {
+    if (!this.collection) throw new Error('MongoDB not available');
+    
     const pipeline = [
       {
         $match: { is_covid19: true }
