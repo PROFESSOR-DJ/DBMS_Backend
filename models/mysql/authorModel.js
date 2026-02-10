@@ -10,16 +10,18 @@ class AuthorModel {
   }
 
   // Get all authors
-  // ✅ FIX: Use query() with inline numbers for LIMIT/OFFSET
   static async findAll(limit = 100, offset = 0) {
-    if (!Number.isInteger(limit) || !Number.isInteger(offset)) {
+    const limitInt = parseInt(limit, 10);
+    const offsetInt = parseInt(offset, 10);
+    
+    if (!Number.isInteger(limitInt) || !Number.isInteger(offsetInt)) {
       throw new Error('Invalid pagination parameters');
     }
     
     const sql = `
       SELECT * FROM author 
       ORDER BY name 
-      LIMIT ${limit} OFFSET ${offset}
+      LIMIT ${limitInt} OFFSET ${offsetInt}
     `;
     const [rows] = await (await getMySQL()).query(sql);
     return rows;
@@ -40,9 +42,10 @@ class AuthorModel {
   }
 
   // Search authors by name
-  // ✅ FIX: Use query() with inline limit
   static async searchByName(name, limit = 50) {
-    if (!Number.isInteger(limit)) {
+    const limitInt = parseInt(limit, 10);
+    
+    if (!Number.isInteger(limitInt)) {
       throw new Error('Invalid limit parameter');
     }
     
@@ -50,27 +53,27 @@ class AuthorModel {
       SELECT * FROM author 
       WHERE name LIKE ? 
       ORDER BY name 
-      LIMIT ${limit}
+      LIMIT ${limitInt}
     `;
     const [rows] = await (await getMySQL()).query(sql, [`%${name}%`]);
     return rows;
   }
 
   // Get top authors by paper count
-  // ✅ FIX: Use query() with inline limit - this is the critical one causing your error!
   static async getTopAuthors(limit = 10) {
-    if (!Number.isInteger(limit)) {
+    const limitInt = parseInt(limit, 10);
+    
+    if (!Number.isInteger(limitInt)) {
       throw new Error('Invalid limit parameter');
     }
     
-    // Inline the limit - safe because we validated it's an integer
     const sql = `
       SELECT a.author_id, a.name, COUNT(pa.paper_id) as paper_count
       FROM author a
       LEFT JOIN paper_author pa ON a.author_id = pa.author_id
       GROUP BY a.author_id, a.name
       ORDER BY paper_count DESC
-      LIMIT ${limit}
+      LIMIT ${limitInt}
     `;
     const [rows] = await (await getMySQL()).query(sql);
     return rows;
