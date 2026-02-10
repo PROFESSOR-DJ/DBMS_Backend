@@ -6,6 +6,8 @@ const authController = require('../controllers/authController');
 // Public routes
 router.get('/', paperController.getAllPapers);
 router.get('/search', paperController.searchPapers);
+router.get('/filters', paperController.getFilterOptions);
+router.get('/suggestions', paperController.getSuggestions);
 router.get('/:id', paperController.getPaperById);
 router.get('/year/:year', paperController.getPapersByYear);
 router.get('/journal/:journal', paperController.getPapersByJournal);

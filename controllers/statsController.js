@@ -64,7 +64,16 @@ const getOverview = async (req, res) => {
 const getAuthorStats = async (req, res) => {
   try {
     const { source = 'mongodb' } = req.query;
-    const limit = parseInt(req.query.limit, 10) || 50; // FIX: Parse as integer
+    // ✅ FIX: Express query params are STRINGS - convert to number for mysql2
+    const limit = Number(req.query.limit) || 50;
+    
+    // ✅ CRITICAL: Validate integer before inlining in SQL
+    if (!Number.isInteger(limit)) {
+      return res.status(400).json({ error: 'Invalid limit parameter' });
+    }
+    
+    // Debug check (can remove after confirming it works)
+    console.log({ limit, typeofLimit: typeof limit, rawLimit: req.query.limit });
 
     let authors;
     if (source === 'mysql') {
@@ -91,19 +100,25 @@ const getAuthorStats = async (req, res) => {
 const getJournalStats = async (req, res) => {
   try {
     const { source = 'mongodb' } = req.query;
-    const limit = parseInt(req.query.limit, 10) || 50; // FIX: Parse as integer
+    // ✅ FIX: Convert string to number for mysql2
+    const limit = Number(req.query.limit) || 50;
+    
+    // ✅ Validate integer
+    if (!Number.isInteger(limit)) {
+      return res.status(400).json({ error: 'Invalid limit parameter' });
+    }
 
     let journals;
     if (source === 'mysql') {
-      // MySQL query for journal stats
-      const query = `
+      // ✅ FIX: Use query() with inline limit instead of execute()
+      const sql = `
         SELECT journal, COUNT(*) as count
         FROM paper
         GROUP BY journal
         ORDER BY count DESC
-        LIMIT ?
+        LIMIT ${limit}
       `;
-      const [rows] = await (await require('../config/database').getMySQL()).execute(query, [limit]);
+      const [rows] = await (await require('../config/database').getMySQL()).query(sql);
       journals = rows;
     } else {
       journals = await paperDocument.getTopJournals(limit);
