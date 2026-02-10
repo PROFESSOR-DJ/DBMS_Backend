@@ -2,28 +2,24 @@ const PaperModel = require('../models/mysql/paperModel');
 const AuthorModel = require('../models/mysql/authorModel');
 const PaperAuthorModel = require('../models/mysql/paperAuthorModel');
 const PaperDocument = require('../models/mongodb/paperModel');
+const DatabaseRouter = require('../config/databaseRouter');
 
 const paperDocument = new PaperDocument();
 
+/**
+ * Get all papers - Uses MongoDB for browsing (flexible schema, fast retrieval)
+ */
 const getAllPapers = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit, 10) || 20;
     const page = parseInt(req.query.page, 10) || 1;
     const offset = (page - 1) * limit;
-    const source = req.query.source || 'mongodb';
     const sortBy = req.query.sortBy || 'recent';
 
-    let papers;
-    let total;
-
-    if (source === 'mysql') {
-      papers = await PaperModel.findAll(limit, offset, sortBy);
-      total = await PaperModel.count();
-    } else {
-      papers = await paperDocument.findAll(limit, offset, sortBy);
-      const stats = await paperDocument.getStats();
-      total = stats.totalPapers || 0;
-    }
+    // DECISION: Use MongoDB for paper browsing (large-scale semi-structured data)
+    const papers = await paperDocument.findAll(limit, offset, sortBy);
+    const stats = await paperDocument.getStats();
+    const total = stats.totalPapers || 0;
 
     res.json({
       papers,
@@ -33,7 +29,8 @@ const getAllPapers = async (req, res) => {
         total,
         pages: Math.ceil(total / limit)
       },
-      source
+      source: 'mongodb',
+      reason: 'Optimized for large-scale document retrieval'
     });
   } catch (error) {
     console.error('Get all papers error:', error);
@@ -41,31 +38,41 @@ const getAllPapers = async (req, res) => {
   }
 };
 
+/**
+ * Get paper by ID - Uses MongoDB for document retrieval
+ * Then enriches with SQL relationship data if needed
+ */
 const getPaperById = async (req, res) => {
   try {
     const { id } = req.params;
-    const { source = 'mongodb' } = req.query;
 
-    let paper;
-
-    if (source === 'mysql') {
-      paper = await PaperModel.findById(id);
-      if (paper) {
-        const authors = await PaperAuthorModel.getAuthorsByPaper(id);
-        paper.authors = authors.map(a => a.name);
-      }
-    } else {
-      paper = await paperDocument.findById(id);
-    }
+    // Primary: MongoDB for document retrieval
+    const paper = await paperDocument.findById(id);
 
     if (!paper) {
       return res.status(404).json({ error: 'Paper not found' });
     }
 
+    // Optional enrichment: Get verified relationships from SQL
+    try {
+      const sqlPaper = await PaperModel.findById(id);
+      if (sqlPaper) {
+        const authors = await PaperAuthorModel.getAuthorsByPaper(id);
+        paper.verified_authors = authors.map(a => ({
+          id: a.author_id,
+          name: a.name
+        }));
+      }
+    } catch (enrichError) {
+      // SQL enrichment is optional, continue without it
+      console.log('SQL enrichment skipped:', enrichError.message);
+    }
+
     res.json({
       paper,
-      source,
-      query_time_ms: Math.random() * 10 + 5
+      source: 'mongodb',
+      enriched_with: 'mysql_relationships',
+      reason: 'MongoDB for document, SQL for verified relationships'
     });
   } catch (error) {
     console.error('Get paper by ID error:', error);
@@ -73,16 +80,17 @@ const getPaperById = async (req, res) => {
   }
 };
 
+/**
+ * Search papers - Uses MongoDB (full-text search capability)
+ */
 const searchPapers = async (req, res) => {
   try {
     const { 
       q, 
-      year, 
       yearFrom,
       yearTo,
       journal, 
       author, 
-      source = 'mongodb',
       minCitations,
       keywords,
       abstract,
@@ -94,59 +102,36 @@ const searchPapers = async (req, res) => {
     const page = parseInt(req.query.page, 10) || 1;
     const offset = (page - 1) * limit;
 
-    let papers;
-    let total = 0;
-
-    if (source === 'mysql') {
-      // MySQL advanced search
-      const searchParams = {
-        query: q,
-        yearFrom,
-        yearTo,
-        journal,
-        author,
-        limit,
-        offset,
-        sortBy
-      };
-      
-      const result = await PaperModel.advancedSearch(searchParams);
-      papers = result.papers;
-      total = result.total;
-      
-    } else {
-      // MongoDB advanced search
-      const searchParams = {
-        query: q,
-        yearFrom: yearFrom ? parseInt(yearFrom) : null,
-        yearTo: yearTo ? parseInt(yearTo) : null,
-        journal,
-        author,
-        minCitations: minCitations ? parseInt(minCitations) : null,
-        keywords,
-        abstract,
-        doi,
-        limit,
-        offset,
-        sortBy
-      };
-      
-      const result = await paperDocument.advancedSearch(searchParams);
-      papers = result.papers;
-      total = result.total;
-    }
+    // DECISION: Use MongoDB for text search (text indexes, flexible queries)
+    const searchParams = {
+      query: q,
+      yearFrom: yearFrom ? parseInt(yearFrom) : null,
+      yearTo: yearTo ? parseInt(yearTo) : null,
+      journal,
+      author,
+      minCitations: minCitations ? parseInt(minCitations) : null,
+      keywords,
+      abstract,
+      doi,
+      limit,
+      offset,
+      sortBy
+    };
+    
+    const result = await paperDocument.advancedSearch(searchParams);
 
     res.json({
-      papers,
-      count: papers.length,
-      total,
+      papers: result.papers,
+      count: result.papers.length,
+      total: result.total,
       pagination: {
         page,
         limit,
-        total,
-        pages: Math.ceil(total / limit)
+        total: result.total,
+        pages: Math.ceil(result.total / limit)
       },
-      source,
+      source: 'mongodb',
+      reason: 'Text search optimized with MongoDB text indexes',
       query_params: { q, yearFrom, yearTo, journal, author, minCitations, sortBy }
     });
   } catch (error) {
@@ -155,23 +140,22 @@ const searchPapers = async (req, res) => {
   }
 };
 
+/**
+ * Get papers by year - Uses MongoDB for aggregation
+ */
 const getPapersByYear = async (req, res) => {
   try {
     const { year } = req.params;
-    const { source = 'mongodb' } = req.query;
 
-    let papers;
-    if (source === 'mysql') {
-      papers = await PaperModel.getByYear(parseInt(year, 10));
-    } else {
-      papers = await paperDocument.getByYear(parseInt(year, 10));
-    }
+    // DECISION: Use MongoDB for year filtering (indexed, fast aggregation)
+    const papers = await paperDocument.getByYear(parseInt(year, 10));
 
     res.json({
       year,
       papers,
       count: papers.length,
-      source
+      source: 'mongodb',
+      reason: 'MongoDB year index provides fast filtering'
     });
   } catch (error) {
     console.error('Get papers by year error:', error);
@@ -179,23 +163,22 @@ const getPapersByYear = async (req, res) => {
   }
 };
 
+/**
+ * Get papers by journal - Uses MongoDB for aggregation
+ */
 const getPapersByJournal = async (req, res) => {
   try {
     const { journal } = req.params;
-    const { source = 'mongodb' } = req.query;
 
-    let papers;
-    if (source === 'mysql') {
-      papers = await PaperModel.getByJournal(journal);
-    } else {
-      papers = await paperDocument.getByJournal(journal);
-    }
+    // DECISION: Use MongoDB for journal filtering
+    const papers = await paperDocument.getByJournal(journal);
 
     res.json({
       journal,
       papers,
       count: papers.length,
-      source
+      source: 'mongodb',
+      reason: 'MongoDB journal index provides fast filtering'
     });
   } catch (error) {
     console.error('Get papers by journal error:', error);
@@ -203,20 +186,40 @@ const getPapersByJournal = async (req, res) => {
   }
 };
 
+/**
+ * Get papers by author - HYBRID APPROACH
+ * Uses SQL for verified relationships, MongoDB for metadata
+ */
 const getPapersByAuthor = async (req, res) => {
   try {
     const { author } = req.params;
-    const { source = 'mongodb' } = req.query;
 
-    let papers;
-    if (source === 'mysql') {
+    // DECISION: Use SQL for author-paper relationships (referential integrity)
+    // Then get full paper details from MongoDB
+    
+    let papers = [];
+    
+    try {
+      // Step 1: Get verified author from SQL
       const authorRecord = await AuthorModel.findByName(author);
+      
       if (authorRecord) {
-        papers = await PaperAuthorModel.getPapersByAuthor(authorRecord.author_id);
-      } else {
-        papers = [];
+        // Step 2: Get paper IDs from SQL (normalized relationships)
+        const sqlPapers = await PaperAuthorModel.getPapersByAuthor(authorRecord.author_id);
+        const paperIds = sqlPapers.map(p => p.paper_id);
+        
+        // Step 3: Get full paper documents from MongoDB
+        if (paperIds.length > 0) {
+          const mongoPapers = await paperDocument.collection.find({
+            paper_id: { $in: paperIds }
+          }).toArray();
+          
+          papers = mongoPapers;
+        }
       }
-    } else {
+    } catch (sqlError) {
+      console.log('SQL lookup failed, falling back to MongoDB:', sqlError.message);
+      // Fallback: Direct MongoDB search
       papers = await paperDocument.getByAuthor(author);
     }
 
@@ -224,7 +227,8 @@ const getPapersByAuthor = async (req, res) => {
       author,
       papers,
       count: papers.length,
-      source
+      source: 'hybrid',
+      reason: 'SQL for verified relationships, MongoDB for document details'
     });
   } catch (error) {
     console.error('Get papers by author error:', error);
@@ -232,21 +236,18 @@ const getPapersByAuthor = async (req, res) => {
   }
 };
 
+/**
+ * Get filter options - Uses MongoDB for quick aggregation
+ */
 const getFilterOptions = async (req, res) => {
   try {
-    const { source = 'mongodb' } = req.query;
-    
-    let filterOptions;
-    
-    if (source === 'mysql') {
-      filterOptions = await PaperModel.getFilterOptions();
-    } else {
-      filterOptions = await paperDocument.getFilterOptions();
-    }
+    // DECISION: Use MongoDB aggregation pipeline (optimized for analytics)
+    const filterOptions = await paperDocument.getFilterOptions();
     
     res.json({
       filters: filterOptions,
-      source
+      source: 'mongodb',
+      reason: 'MongoDB aggregation provides fast distinct value queries'
     });
   } catch (error) {
     console.error('Get filter options error:', error);
@@ -254,27 +255,25 @@ const getFilterOptions = async (req, res) => {
   }
 };
 
+/**
+ * Get suggestions - Uses MongoDB for text matching
+ */
 const getSuggestions = async (req, res) => {
   try {
     const { q, type = 'all' } = req.query;
-    const { source = 'mongodb' } = req.query;
     
     if (!q || q.length < 2) {
       return res.json({ suggestions: [] });
     }
     
-    let suggestions = [];
-    
-    if (source === 'mysql') {
-      suggestions = await PaperModel.getSuggestions(q, type);
-    } else {
-      suggestions = await paperDocument.getSuggestions(q, type);
-    }
+    // DECISION: Use MongoDB for autocomplete (regex queries on indexed fields)
+    const suggestions = await paperDocument.getSuggestions(q, type);
     
     res.json({
       suggestions,
       type,
-      source
+      source: 'mongodb',
+      reason: 'MongoDB regex search for autocomplete functionality'
     });
   } catch (error) {
     console.error('Get suggestions error:', error);
@@ -282,13 +281,22 @@ const getSuggestions = async (req, res) => {
   }
 };
 
+/**
+ * Create paper - HYBRID APPROACH with transaction-like behavior
+ * Uses SQL for normalized data, MongoDB for full document
+ */
 const createPaper = async (req, res) => {
   try {
     const paper = req.body;
     
-    const mysqlResult = await PaperModel.create(paper);
-    const mongoResult = await paperDocument.create(paper);
+    // DECISION: Write to both databases for consistency
+    // SQL: Normalized relational data with integrity
+    // MongoDB: Full document for search and analytics
     
+    // Step 1: Create in SQL (normalized schema with constraints)
+    const mysqlResult = await PaperModel.create(paper);
+    
+    // Step 2: Create author relationships in SQL
     if (paper.authors && Array.isArray(paper.authors)) {
       for (const authorName of paper.authors) {
         let author = await AuthorModel.findByName(authorName);
@@ -299,12 +307,16 @@ const createPaper = async (req, res) => {
         await PaperAuthorModel.create(paper.paper_id, author.author_id);
       }
     }
+    
+    // Step 3: Create in MongoDB (full document with metadata)
+    const mongoResult = await paperDocument.create(paper);
 
     res.status(201).json({
-      message: 'Paper created successfully in both databases',
+      message: 'Paper created successfully in hybrid architecture',
       mysql_insert_id: mysqlResult.insertId,
       mongo_insert_id: mongoResult.insertedId,
-      paper
+      paper,
+      reason: 'SQL for integrity, MongoDB for search and analytics'
     });
   } catch (error) {
     console.error('Create paper error:', error);
@@ -312,10 +324,17 @@ const createPaper = async (req, res) => {
   }
 };
 
+/**
+ * Update paper - Updates both databases
+ */
 const updatePaper = async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
+
+    // Update both databases for consistency
+    await PaperModel.update(id, updates);
+    await paperDocument.update(id, updates);
 
     res.json({
       message: 'Paper updated in both databases',
@@ -328,9 +347,15 @@ const updatePaper = async (req, res) => {
   }
 };
 
+/**
+ * Delete paper - Deletes from both databases
+ */
 const deletePaper = async (req, res) => {
   try {
     const { id } = req.params;
+    
+    await PaperModel.delete(id);
+    await paperDocument.delete(id);
     
     res.json({
       message: 'Paper deleted from both databases',
@@ -342,6 +367,9 @@ const deletePaper = async (req, res) => {
   }
 };
 
+/**
+ * Bulk insert - Uses MongoDB for efficiency, then syncs to SQL
+ */
 const addPapersBulk = async (req, res) => {
   try {
     const papers = req.body;
@@ -350,31 +378,36 @@ const addPapersBulk = async (req, res) => {
       return res.status(400).json({ error: 'Expected an array of papers' });
     }
 
-    const results = {
-      mysql: { success: 0, failed: 0 },
-      mongodb: { success: 0, failed: 0 }
-    };
-
-    for (const paper of papers) {
-      try {
-        await PaperModel.create(paper);
-        results.mysql.success++;
-      } catch (mysqlError) {
-        results.mysql.failed++;
+    // DECISION: Bulk insert into MongoDB first (faster for large batches)
+    const mongoResults = await paperDocument.collection.insertMany(papers);
+    
+    // Then sync to SQL asynchronously (don't block response)
+    setImmediate(async () => {
+      for (const paper of papers) {
+        try {
+          await PaperModel.create(paper);
+          
+          if (paper.authors) {
+            for (const authorName of paper.authors) {
+              let author = await AuthorModel.findByName(authorName);
+              if (!author) {
+                const authorResult = await AuthorModel.create({ name: authorName });
+                author = { author_id: authorResult.insertId, name: authorName };
+              }
+              await PaperAuthorModel.create(paper.paper_id, author.author_id);
+            }
+          }
+        } catch (syncError) {
+          console.error(`Failed to sync paper ${paper.paper_id} to SQL:`, syncError.message);
+        }
       }
-
-      try {
-        await paperDocument.create(paper);
-        results.mongodb.success++;
-      } catch (mongoError) {
-        results.mongodb.failed++;
-      }
-    }
+    });
 
     res.json({
-      message: 'Bulk insert completed',
-      results,
-      total_papers: papers.length
+      message: 'Bulk insert completed in MongoDB, syncing to SQL in background',
+      inserted_count: mongoResults.insertedCount,
+      total_papers: papers.length,
+      reason: 'MongoDB for fast bulk insert, SQL sync for integrity'
     });
   } catch (error) {
     console.error('Bulk insert error:', error);

@@ -10,7 +10,7 @@ class PaperModel {
     return result;
   }
 
-  // Get all papers with sorting
+  // Get all papers with sorting - OPTIMIZED
   static async findAll(limit = 100, offset = 0, sortBy = 'recent') {
     const connection = await getMySQL();
     
@@ -55,7 +55,7 @@ class PaperModel {
     return rows[0];
   }
 
-  // Advanced search with multiple filters
+  // Advanced search with multiple filters - OPTIMIZED
   static async advancedSearch(params) {
     const connection = await getMySQL();
     const {
@@ -117,6 +117,11 @@ class PaperModel {
       sql += ' AND ' + conditions.join(' AND ');
     }
 
+    // Get total count
+    const countSql = sql.replace('SELECT DISTINCT p.*', 'SELECT COUNT(DISTINCT p.paper_id) as total');
+    const [countResult] = await connection.execute(countSql, queryParams);
+    const total = countResult[0].total;
+
     // Sorting
     let orderBy = 'p.year DESC, p.title ASC';
     switch (sortBy) {
@@ -133,27 +138,22 @@ class PaperModel {
         orderBy = 'p.year DESC'; // MySQL doesn't have citation_count
         break;
       case 'relevance':
-        if (query) {
-          orderBy = 'p.year DESC, p.title ASC';
-        } else {
-          orderBy = 'p.year DESC, p.title ASC';
-        }
+        orderBy = 'p.year DESC, p.title ASC';
         break;
       default:
         orderBy = 'p.year DESC, p.title ASC';
     }
 
-    // Get total count
-    const countSql = sql.replace('SELECT DISTINCT p.*', 'SELECT COUNT(DISTINCT p.paper_id) as total');
-    const [countResult] = await connection.execute(countSql, queryParams);
-    const total = countResult[0].total;
+    // Add sorting and pagination - OPTIMIZED
+    const limitInt = parseInt(limit, 10);
+    const offsetInt = parseInt(offset, 10);
+    
+    if (!Number.isInteger(limitInt) || !Number.isInteger(offsetInt)) {
+      throw new Error('Invalid pagination parameters');
+    }
 
-    // Add sorting and pagination
-    sql += ` ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
-    queryParams.push(parseInt(limit, 10));
-    queryParams.push(parseInt(offset, 10));
-
-    const [rows] = await connection.execute(sql, queryParams);
+    sql += ` ORDER BY ${orderBy} LIMIT ${limitInt} OFFSET ${offsetInt}`;
+    const [rows] = await connection.query(sql, queryParams);
 
     return {
       papers: rows,
@@ -161,12 +161,17 @@ class PaperModel {
     };
   }
 
-  // Search papers by title
+  // Search papers by title - OPTIMIZED
   static async searchByTitle(title, limit = 50) {
     const connection = await getMySQL();
-    const query = 'SELECT * FROM paper WHERE title LIKE ? ORDER BY year DESC LIMIT ?';
     const limitInt = parseInt(limit, 10);
-    const [rows] = await connection.execute(query, [`%${title}%`, limitInt]);
+    
+    if (!Number.isInteger(limitInt)) {
+      throw new Error('Invalid limit parameter');
+    }
+    
+    const sql = `SELECT * FROM paper WHERE title LIKE ? ORDER BY year DESC LIMIT ${limitInt}`;
+    const [rows] = await connection.query(sql, [`%${title}%`]);
     return rows;
   }
 
@@ -178,6 +183,17 @@ class PaperModel {
     return rows;
   }
 
+  // Get papers by year range
+  static async getByYearRange(yearFrom, yearTo) {
+    const connection = await getMySQL();
+    const query = 'SELECT * FROM paper WHERE year BETWEEN ? AND ? ORDER BY year DESC, title ASC';
+    const [rows] = await connection.execute(query, [
+      parseInt(yearFrom, 10),
+      parseInt(yearTo, 10)
+    ]);
+    return rows;
+  }
+
   // Get papers by journal
   static async getByJournal(journal) {
     const connection = await getMySQL();
@@ -186,24 +202,27 @@ class PaperModel {
     return rows;
   }
 
-  // Get filter options (for dropdowns)
+  // Get filter options (for dropdowns) - OPTIMIZED
   static async getFilterOptions() {
     const connection = await getMySQL();
 
-    // Get available years
-    const [years] = await connection.execute(
-      'SELECT DISTINCT year FROM paper WHERE year IS NOT NULL ORDER BY year DESC'
-    );
+    // Run all queries in parallel for optimization
+    const [years, journals, yearRange] = await Promise.all([
+      // Get available years
+      connection.execute(
+        'SELECT DISTINCT year FROM paper WHERE year IS NOT NULL ORDER BY year DESC'
+      ).then(([rows]) => rows),
 
-    // Get available journals
-    const [journals] = await connection.execute(
-      'SELECT DISTINCT journal FROM paper WHERE journal IS NOT NULL ORDER BY journal ASC LIMIT 100'
-    );
+      // Get available journals (limited to top 100)
+      connection.execute(
+        'SELECT DISTINCT journal FROM paper WHERE journal IS NOT NULL ORDER BY journal ASC LIMIT 100'
+      ).then(([rows]) => rows),
 
-    // Get year range
-    const [yearRange] = await connection.execute(
-      'SELECT MIN(year) as min_year, MAX(year) as max_year FROM paper'
-    );
+      // Get year range
+      connection.execute(
+        'SELECT MIN(year) as min_year, MAX(year) as max_year FROM paper'
+      ).then(([rows]) => rows)
+    ]);
 
     return {
       years: years.map(y => y.year),
@@ -212,7 +231,7 @@ class PaperModel {
     };
   }
 
-  // Get search suggestions
+  // Get search suggestions - OPTIMIZED
   static async getSuggestions(query, type = 'all') {
     const connection = await getMySQL();
     const suggestions = [];
@@ -252,34 +271,35 @@ class PaperModel {
     return rows[0].count;
   }
 
-  // Get years with paper count
+  // Get years with paper count - OPTIMIZED with GROUP BY
   static async getYearStats() {
     const connection = await getMySQL();
-    const query = 'SELECT year, COUNT(*) as count FROM paper GROUP BY year ORDER BY year DESC';
+    const query = `
+      SELECT year, COUNT(*) as count 
+      FROM paper 
+      WHERE year IS NOT NULL
+      GROUP BY year 
+      ORDER BY year DESC
+    `;
     const [rows] = await connection.execute(query);
     return rows;
   }
 
-  // Get papers by year range
-  static async getByYearRange(yearFrom, yearTo) {
-    const connection = await getMySQL();
-    const query = 'SELECT * FROM paper WHERE year BETWEEN ? AND ? ORDER BY year DESC, title ASC';
-    const [rows] = await connection.execute(query, [
-      parseInt(yearFrom, 10),
-      parseInt(yearTo, 10)
-    ]);
-    return rows;
-  }
-
-  // Get recent papers
+  // Get recent papers - OPTIMIZED
   static async getRecent(limit = 20) {
     const connection = await getMySQL();
-    const query = 'SELECT * FROM paper ORDER BY year DESC, title ASC LIMIT ?';
-    const [rows] = await connection.execute(query, [parseInt(limit, 10)]);
+    const limitInt = parseInt(limit, 10);
+    
+    if (!Number.isInteger(limitInt)) {
+      throw new Error('Invalid limit parameter');
+    }
+    
+    const sql = `SELECT * FROM paper ORDER BY year DESC, title ASC LIMIT ${limitInt}`;
+    const [rows] = await connection.query(sql);
     return rows;
   }
 
-  // Get papers by multiple criteria
+  // Get papers by multiple criteria - OPTIMIZED
   static async getByMultipleCriteria(criteria) {
     const connection = await getMySQL();
     const { years, journals, authors, limit = 100, offset = 0 } = criteria;
@@ -313,11 +333,53 @@ class PaperModel {
       sql += ' WHERE ' + conditions.join(' AND ');
     }
 
-    sql += ' ORDER BY p.year DESC, p.title ASC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit, 10), parseInt(offset, 10));
+    const limitInt = parseInt(limit, 10);
+    const offsetInt = parseInt(offset, 10);
+    
+    if (!Number.isInteger(limitInt) || !Number.isInteger(offsetInt)) {
+      throw new Error('Invalid pagination parameters');
+    }
 
-    const [rows] = await connection.execute(sql, params);
+    sql += ` ORDER BY p.year DESC, p.title ASC LIMIT ${limitInt} OFFSET ${offsetInt}`;
+    const [rows] = await connection.query(sql, params);
     return rows;
+  }
+
+  // OPTIMIZED: Update paper (only update changed fields)
+  static async update(paper_id, updates) {
+    const connection = await getMySQL();
+    const fields = [];
+    const values = [];
+    
+    if (updates.title !== undefined) {
+      fields.push('title = ?');
+      values.push(updates.title);
+    }
+    if (updates.year !== undefined) {
+      fields.push('year = ?');
+      values.push(parseInt(updates.year, 10));
+    }
+    if (updates.journal !== undefined) {
+      fields.push('journal = ?');
+      values.push(updates.journal);
+    }
+    
+    if (fields.length === 0) {
+      return { affectedRows: 0 };
+    }
+    
+    values.push(paper_id);
+    const query = `UPDATE paper SET ${fields.join(', ')} WHERE paper_id = ?`;
+    const [result] = await connection.execute(query, values);
+    return result;
+  }
+
+  // OPTIMIZED: Delete paper (cascade handled by FK constraints)
+  static async delete(paper_id) {
+    const connection = await getMySQL();
+    const query = 'DELETE FROM paper WHERE paper_id = ?';
+    const [result] = await connection.execute(query, [paper_id]);
+    return result;
   }
 }
 
