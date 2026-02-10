@@ -1,7 +1,6 @@
 const { getMongoDB } = require('../../config/database');
 
 class PaperDocument {
-  // Use lazy initialization - don't try to get collection in constructor
   getCollection() {
     try {
       const db = getMongoDB();
@@ -11,11 +10,10 @@ class PaperDocument {
     }
   }
 
-  // Create paper document matching your schema
+  // Create paper document
   async create(paper) {
     const collection = this.getCollection();
     
-    // Ensure all required fields from your schema
     const paperDoc = {
       paper_id: paper.paper_id || `paper_${Date.now()}`,
       title: paper.title || '',
@@ -28,7 +26,6 @@ class PaperDocument {
       sha: paper.sha || '',
       source: paper.source || 'manual',
       year: typeof paper.year === 'number' ? paper.year : new Date().getFullYear(),
-      // Optional fields
       ...(paper.citation_count && { citation_count: paper.citation_count }),
       ...(paper.keywords && { keywords: paper.keywords }),
       ...(paper.created_at && { created_at: paper.created_at }),
@@ -39,10 +36,33 @@ class PaperDocument {
     return result;
   }
 
-  // Get all paper documents
-  async findAll(limit = 100, skip = 0) {
+  // Get all papers with sorting
+  async findAll(limit = 100, skip = 0, sortBy = 'recent') {
     const collection = this.getCollection();
-    const cursor = collection.find().sort({ year: -1 }).skip(skip).limit(limit);
+    
+    let sortOption = { year: -1, title: 1 };
+    
+    switch (sortBy) {
+      case 'recent':
+        sortOption = { year: -1, title: 1 };
+        break;
+      case 'oldest':
+        sortOption = { year: 1, title: 1 };
+        break;
+      case 'title':
+        sortOption = { title: 1 };
+        break;
+      case 'citations':
+        sortOption = { citation_count: -1, year: -1 };
+        break;
+      case 'journal':
+        sortOption = { journal: 1, year: -1 };
+        break;
+      default:
+        sortOption = { year: -1, title: 1 };
+    }
+    
+    const cursor = collection.find().sort(sortOption).skip(skip).limit(limit);
     return cursor.toArray();
   }
 
@@ -50,6 +70,125 @@ class PaperDocument {
   async findById(paper_id) {
     const collection = this.getCollection();
     return collection.findOne({ paper_id: paper_id });
+  }
+
+  // Advanced search with multiple filters
+  async advancedSearch(params) {
+    const collection = this.getCollection();
+    const {
+      query,
+      yearFrom,
+      yearTo,
+      journal,
+      author,
+      minCitations,
+      keywords,
+      abstract,
+      doi,
+      limit = 20,
+      offset = 0,
+      sortBy = 'relevance'
+    } = params;
+
+    // Build query filter
+    const filter = {};
+    const textSearchFields = [];
+
+    // Text search
+    if (query) {
+      // Try text index search first
+      filter.$text = { $search: query };
+    }
+
+    // Year range filter
+    if (yearFrom || yearTo) {
+      filter.year = {};
+      if (yearFrom) filter.year.$gte = parseInt(yearFrom);
+      if (yearTo) filter.year.$lte = parseInt(yearTo);
+    }
+
+    // Journal filter
+    if (journal) {
+      filter.journal = { $regex: journal, $options: 'i' };
+    }
+
+    // Author filter
+    if (author) {
+      filter.authors = { $regex: author, $options: 'i' };
+    }
+
+    // Citation filter
+    if (minCitations) {
+      filter.citation_count = { $gte: parseInt(minCitations) };
+    }
+
+    // Keywords filter
+    if (keywords) {
+      filter.keywords = { $regex: keywords, $options: 'i' };
+    }
+
+    // Abstract filter
+    if (abstract) {
+      filter.abstract = { $regex: abstract, $options: 'i' };
+    }
+
+    // DOI filter
+    if (doi) {
+      filter.doi = doi;
+    }
+
+    // Get total count
+    const total = await collection.countDocuments(filter);
+
+    // Sorting
+    let sortOption = { year: -1, title: 1 };
+    
+    switch (sortBy) {
+      case 'recent':
+        sortOption = { year: -1, title: 1 };
+        break;
+      case 'oldest':
+        sortOption = { year: 1, title: 1 };
+        break;
+      case 'title':
+        sortOption = { title: 1 };
+        break;
+      case 'citations':
+        sortOption = { citation_count: -1, year: -1 };
+        break;
+      case 'relevance':
+        if (query && filter.$text) {
+          sortOption = { score: { $meta: "textScore" }, year: -1 };
+        } else {
+          sortOption = { year: -1, title: 1 };
+        }
+        break;
+      default:
+        sortOption = { year: -1, title: 1 };
+    }
+
+    // Execute query
+    let cursor;
+    if (query && filter.$text && sortBy === 'relevance') {
+      cursor = collection
+        .find(filter, { score: { $meta: "textScore" } })
+        .sort(sortOption)
+        .skip(offset)
+        .limit(limit);
+    } else {
+      cursor = collection
+        .find(filter)
+        .sort(sortOption)
+        .skip(offset)
+        .limit(limit);
+    }
+
+    const papers = await cursor.toArray();
+
+    return {
+      papers,
+      total
+    };
   }
 
   // Search papers by text (using MongoDB text index)
@@ -63,7 +202,6 @@ class PaperDocument {
       ).sort({ score: { $meta: "textScore" } }).limit(limit);
       return cursor.toArray();
     } catch (error) {
-      // Fallback to regex search if text index is not available
       console.log('Text search failed, falling back to regex:', error.message);
       const cursor = collection.find({
         $or: [
@@ -82,25 +220,136 @@ class PaperDocument {
     return cursor.toArray();
   }
 
+  // Get papers by year range
+  async getByYearRange(yearFrom, yearTo) {
+    const collection = this.getCollection();
+    const cursor = collection.find({
+      year: {
+        $gte: parseInt(yearFrom),
+        $lte: parseInt(yearTo)
+      }
+    }).sort({ year: -1, title: 1 });
+    return cursor.toArray();
+  }
+
   // Get papers by journal
   async getByJournal(journal) {
     const collection = this.getCollection();
-    const cursor = collection.find({ journal: journal }).sort({ year: -1 });
+    const cursor = collection.find({ 
+      journal: { $regex: journal, $options: 'i' } 
+    }).sort({ year: -1 });
     return cursor.toArray();
   }
 
   // Get papers by author
   async getByAuthor(authorName) {
     const collection = this.getCollection();
-    const cursor = collection.find({ authors: authorName }).sort({ year: -1 });
+    const cursor = collection.find({ 
+      authors: { $regex: authorName, $options: 'i' } 
+    }).sort({ year: -1 });
     return cursor.toArray();
   }
 
-  // Get papers by COVID-19 flag
+  // Get COVID-19 papers
   async getCovid19Papers(limit = 50) {
     const collection = this.getCollection();
     const cursor = collection.find({ is_covid19: true }).sort({ year: -1 }).limit(limit);
     return cursor.toArray();
+  }
+
+  // Get filter options
+  async getFilterOptions() {
+    const collection = this.getCollection();
+
+    const [yearStats, journalStats, keywordStats] = await Promise.all([
+      // Get available years
+      collection.distinct('year').then(years => 
+        years.filter(y => y != null).sort((a, b) => b - a)
+      ),
+      
+      // Get top journals
+      collection.aggregate([
+        { $group: { _id: '$journal', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 50 }
+      ]).toArray(),
+      
+      // Get top keywords
+      collection.aggregate([
+        { $unwind: '$keywords' },
+        { $group: { _id: '$keywords', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 50 }
+      ]).toArray()
+    ]);
+
+    // Get year range
+    const yearRange = await collection.aggregate([
+      {
+        $group: {
+          _id: null,
+          minYear: { $min: '$year' },
+          maxYear: { $max: '$year' }
+        }
+      }
+    ]).toArray();
+
+    return {
+      years: yearStats,
+      journals: journalStats.map(j => ({ name: j._id, count: j.count })),
+      keywords: keywordStats.map(k => ({ name: k._id, count: k.count })),
+      yearRange: yearRange[0] || { minYear: 2000, maxYear: 2024 }
+    };
+  }
+
+  // Get search suggestions
+  async getSuggestions(query, type = 'all') {
+    const collection = this.getCollection();
+    const suggestions = [];
+
+    if (type === 'all' || type === 'title') {
+      const titles = await collection
+        .find(
+          { title: { $regex: `^${query}`, $options: 'i' } },
+          { projection: { title: 1 } }
+        )
+        .limit(5)
+        .toArray();
+      
+      suggestions.push(...titles.map(t => ({ type: 'title', value: t.title })));
+    }
+
+    if (type === 'all' || type === 'journal') {
+      const journals = await collection.distinct('journal', {
+        journal: { $regex: `^${query}`, $options: 'i' }
+      });
+      
+      suggestions.push(...journals.slice(0, 5).map(j => ({ type: 'journal', value: j })));
+    }
+
+    if (type === 'all' || type === 'author') {
+      const authors = await collection.aggregate([
+        { $unwind: '$authors' },
+        { $match: { authors: { $regex: `^${query}`, $options: 'i' } } },
+        { $group: { _id: '$authors' } },
+        { $limit: 5 }
+      ]).toArray();
+      
+      suggestions.push(...authors.map(a => ({ type: 'author', value: a._id })));
+    }
+
+    if (type === 'all' || type === 'keyword') {
+      const keywords = await collection.aggregate([
+        { $unwind: '$keywords' },
+        { $match: { keywords: { $regex: `^${query}`, $options: 'i' } } },
+        { $group: { _id: '$keywords' } },
+        { $limit: 5 }
+      ]).toArray();
+      
+      suggestions.push(...keywords.map(k => ({ type: 'keyword', value: k._id })));
+    }
+
+    return suggestions;
   }
 
   // Get aggregated statistics
@@ -286,6 +535,38 @@ class PaperDocument {
     
     const result = await collection.aggregate(pipeline).toArray();
     return result[0] || {};
+  }
+
+  // Get papers by multiple criteria
+  async getByMultipleCriteria(criteria) {
+    const collection = this.getCollection();
+    const { years, journals, authors, keywords, limit = 100, skip = 0 } = criteria;
+    
+    const filter = {};
+    
+    if (years && years.length > 0) {
+      filter.year = { $in: years.map(y => parseInt(y)) };
+    }
+    
+    if (journals && journals.length > 0) {
+      filter.journal = { $in: journals };
+    }
+    
+    if (authors && authors.length > 0) {
+      filter.authors = { $in: authors };
+    }
+    
+    if (keywords && keywords.length > 0) {
+      filter.keywords = { $in: keywords };
+    }
+    
+    const cursor = collection
+      .find(filter)
+      .sort({ year: -1, title: 1 })
+      .skip(skip)
+      .limit(limit);
+    
+    return cursor.toArray();
   }
 }
 
