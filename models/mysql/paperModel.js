@@ -13,6 +13,15 @@ class PaperModel {
   // Get all papers with sorting
   static async findAll(limit = 100, offset = 0, sortBy = 'recent') {
     const connection = await getMySQL();
+    
+    // ✅ FIX: Validate and convert to integers
+    const limitInt = parseInt(limit, 10);
+    const offsetInt = parseInt(offset, 10);
+    
+    if (!Number.isInteger(limitInt) || !Number.isInteger(offsetInt)) {
+      throw new Error('Invalid pagination parameters');
+    }
+    
     let orderBy = 'year DESC, title ASC';
     
     switch (sortBy) {
@@ -32,10 +41,9 @@ class PaperModel {
         orderBy = 'year DESC, title ASC';
     }
     
-    const query = `SELECT * FROM paper ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
-    const limitInt = parseInt(limit, 10);
-    const offsetInt = parseInt(offset, 10);
-    const [rows] = await connection.execute(query, [limitInt, offsetInt]);
+    // ✅ FIX: Use query() with inline integers instead of execute()
+    const sql = `SELECT * FROM paper ORDER BY ${orderBy} LIMIT ${limitInt} OFFSET ${offsetInt}`;
+    const [rows] = await connection.query(sql);
     return rows;
   }
 

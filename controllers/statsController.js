@@ -64,17 +64,13 @@ const getOverview = async (req, res) => {
 const getAuthorStats = async (req, res) => {
   try {
     const { source = 'mongodb' } = req.query;
-    // ✅ FIX: Express query params are STRINGS - convert to number for mysql2
+    // ✅ FIX: Convert string to number and validate
     const limit = Number(req.query.limit) || 50;
     
-    // ✅ CRITICAL: Validate integer before inlining in SQL
     if (!Number.isInteger(limit)) {
       return res.status(400).json({ error: 'Invalid limit parameter' });
     }
     
-    // Debug check (can remove after confirming it works)
-    console.log({ limit, typeofLimit: typeof limit, rawLimit: req.query.limit });
-
     let authors;
     if (source === 'mysql') {
       authors = await AuthorModel.getTopAuthors(limit);
@@ -100,17 +96,16 @@ const getAuthorStats = async (req, res) => {
 const getJournalStats = async (req, res) => {
   try {
     const { source = 'mongodb' } = req.query;
-    // ✅ FIX: Convert string to number for mysql2
+    // ✅ FIX: Convert string to number and validate
     const limit = Number(req.query.limit) || 50;
     
-    // ✅ Validate integer
     if (!Number.isInteger(limit)) {
       return res.status(400).json({ error: 'Invalid limit parameter' });
     }
 
     let journals;
     if (source === 'mysql') {
-      // ✅ FIX: Use query() with inline limit instead of execute()
+      // ✅ FIX: Use query() with inline limit
       const sql = `
         SELECT journal, COUNT(*) as count
         FROM paper
