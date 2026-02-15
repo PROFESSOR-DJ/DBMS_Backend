@@ -25,9 +25,10 @@ const register = async (req, res) => {
 
     // Create user
     const user = {
-      username: name.toLowerCase().replace(/\s+/g, '_'),
+      name,
       email: email.toLowerCase(),
-      password_hash
+      password: password_hash,
+      role: 'researcher'
     };
 
     const result = await UserModel.create(user);
@@ -72,13 +73,10 @@ const login = async (req, res) => {
     }
 
     // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-
-    // Update last login
-    await UserModel.updateLastLogin(user.user_id);
 
     // Create JWT token
     const token = jwt.sign(

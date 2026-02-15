@@ -36,29 +36,36 @@ let mongoDB;
 
 const connectMongoDB = async () => {
   try {
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+    const uri = process.env.MONGODB_URI;
+
+    if (!uri) {
+      console.log('   ⚠️  MONGODB_URI not found in .env, skipping MongoDB connection');
+      mongoDB = null;
+      return false;
+    }
+
     const dbName = process.env.MONGODB_DB || 'research_db';
-    
+
     console.log('🔗 Connecting to MongoDB...');
     console.log(`   URI: ${uri}`);
     console.log(`   Database: ${dbName}`);
-    
+
     mongoClient = new MongoClient(uri);
     await mongoClient.connect();
     mongoDB = mongoClient.db(dbName);
-    
+
     // Test connection
     await mongoDB.command({ ping: 1 });
     console.log('✅ MongoDB database connected successfully');
-    
+
     // Create indexes for better performance
     try {
       const papersCollection = mongoDB.collection('papers');
-      
+
       // Check existing indexes
       const existingIndexes = await papersCollection.indexes();
       const hasTextIndex = existingIndexes.some(idx => idx.name === 'text_search' || (idx.key && idx.key._fts === 'text'));
-      
+
       if (!hasTextIndex) {
         await papersCollection.createIndex(
           { title: 'text', abstract: 'text' },
@@ -66,19 +73,19 @@ const connectMongoDB = async () => {
         );
         console.log('   ✓ Created text search index');
       }
-      
+
       // Create other indexes if they don't exist
       await papersCollection.createIndex({ paper_id: 1 }, { unique: true, name: 'idx_paper_id' });
       await papersCollection.createIndex({ journal: 1 }, { name: 'idx_journal' });
       await papersCollection.createIndex({ year: 1 }, { name: 'idx_year' });
       await papersCollection.createIndex({ authors: 1 }, { name: 'idx_authors' });
       await papersCollection.createIndex({ is_covid19: 1 }, { name: 'idx_covid19' });
-      
+
       console.log('   ✓ MongoDB indexes verified/created');
     } catch (indexError) {
       console.log('   ⚠️  Index creation warning:', indexError.message);
     }
-    
+
     return true;
   } catch (error) {
     console.error('❌ Error connecting to MongoDB:', error.message);
@@ -103,6 +110,10 @@ const getMongoDB = () => {
   return mongoDB;
 };
 
+const isMongoDBConnected = () => {
+  return !!mongoDB;
+};
+
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
@@ -121,5 +132,6 @@ module.exports = {
   connectMySQL,
   connectMongoDB,
   getMySQL,
-  getMongoDB
+  getMongoDB,
+  isMongoDBConnected
 };
