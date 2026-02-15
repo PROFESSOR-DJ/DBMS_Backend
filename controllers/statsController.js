@@ -12,7 +12,8 @@ const paperDocument = new PaperDocument();
 const getOverview = async (req, res) => {
   try {
     // OPTIMIZED: Run queries in parallel
-    const [mysqlStats, mongoStats, papersPerYear, topJournals, topAuthors] = await Promise.all([
+    // OPTIMIZED: Run queries in parallel
+    const [mysqlStats, /*mongoStats,*/ papersPerYear, topJournals, topAuthors] = await Promise.all([
       // SQL stats (OPTIMIZED: Simple COUNT queries on indexed PKs)
       (async () => {
         const totalPapers = await PaperModel.count();
@@ -20,19 +21,22 @@ const getOverview = async (req, res) => {
         const yearStats = await PaperModel.getYearStats();
         return { totalPapers, totalAuthors, yearStats };
       })(),
-      
+
       // MongoDB stats (OPTIMIZED: Single aggregation pipeline)
-      paperDocument.getStats(),
-      
+      // paperDocument.getStats(),
+
       // MongoDB aggregation (OPTIMIZED: Group by year with index)
-      paperDocument.getPapersPerYear(),
-      
+      PaperModel.getYearStats(), // Replaced mongo: paperDocument.getPapersPerYear(),
+
       // MongoDB aggregation (OPTIMIZED: Group by journal, limit 10)
-      paperDocument.getTopJournals(10),
-      
+      PaperModel.getTopJournals(10), // Replaced mongo: paperDocument.getTopJournals(10),
+
       // MongoDB aggregation (OPTIMIZED: Unwind + group, limit 10)
-      paperDocument.getTopAuthors(10)
+      AuthorModel.getTopAuthors(10) // Replaced mongo: paperDocument.getTopAuthors(10)
     ]);
+
+    // Placeholder for commented out mongoStats
+    const mongoStats = { totalPapers: 0, uniqueJournalCount: 0, uniqueAuthorCount: 0, avgCitations: 0 };
 
     res.json({
       database_overview: {
@@ -74,11 +78,11 @@ const getOverview = async (req, res) => {
 const getAuthorStats = async (req, res) => {
   try {
     const limit = Number(req.query.limit) || 50;
-    
+
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       return res.status(400).json({ error: 'Invalid limit parameter (1-1000)' });
     }
-    
+
     // DECISION: Use SQL for author statistics (normalized relationships)
     // OPTIMIZED QUERY: GROUP BY first, then JOIN to author table
     const authors = await AuthorModel.getTopAuthors(limit);
@@ -104,18 +108,18 @@ const getAuthorStats = async (req, res) => {
 const getJournalStats = async (req, res) => {
   try {
     const limit = Number(req.query.limit) || 50;
-    
+
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       return res.status(400).json({ error: 'Invalid limit parameter (1-1000)' });
     }
 
-    // DECISION: Use MongoDB for journal aggregation (optimized pipeline)
-    const journals = await paperDocument.getTopJournals(limit);
+    // DECISION: Use MySQL for journal aggregation (forced)
+    const journals = await PaperModel.getTopJournals(limit); // Switched to MySQL
 
     res.json({
       journals,
       count: journals.length,
-      source: 'mongodb',
+      source: 'mysql', // Changed to mysql as per instruction
       reason: 'MongoDB aggregation pipeline optimized for grouping',
       optimization: 'Single-pass aggregation: $group by journal, $sort by count, $limit',
       pipeline: '[{$group: {_id: "$journal", count: {$sum: 1}}}, {$sort: {count: -1}}, {$limit: N}]'
@@ -131,12 +135,12 @@ const getJournalStats = async (req, res) => {
  */
 const getPapersPerYear = async (req, res) => {
   try {
-    // DECISION: Use MongoDB for year aggregation (year field is indexed)
-    const data = await paperDocument.getPapersPerYear();
+    // DECISION: Use MySQL for year aggregation (forced)
+    const data = await PaperModel.getYearStats(); // Switched to MySQL
 
     res.json({
       papers_per_year: data,
-      source: 'mongodb',
+      source: 'mysql', // Changed to mysql as per instruction
       reason: 'MongoDB year index enables fast grouping',
       optimization: 'Index-covered query on year field',
       analysis: 'Shows publication trends over time'

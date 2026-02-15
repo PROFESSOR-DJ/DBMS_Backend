@@ -3,9 +3,9 @@ const { getMySQL } = require('../../config/database');
 class UserModel {
   // Create user
   static async create(user) {
-    const { username, email, password_hash } = user;
-    const query = 'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)';
-    const [result] = await (await getMySQL()).execute(query, [username, email, password_hash]);
+    const { name, email, password, role = 'researcher' } = user;
+    const query = 'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)';
+    const [result] = await (await getMySQL()).execute(query, [name, email, password, role]);
     return result;
   }
 
