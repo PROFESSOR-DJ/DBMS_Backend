@@ -11,10 +11,12 @@ dotenv.config();
 const { connectMySQL, connectMongoDB } = require('./config/database');
 
 // Import routes
+// Import routes
 const authRoutes = require('./routes/authRoutes');
 const paperRoutes = require('./routes/paperRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 const hybridRoutes = require('./routes/hybridRoutes');
+const authorRoutes = require('./routes/authorRoutes');
 
 // Initialize Express app
 const app = express();
@@ -48,6 +50,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/papers', paperRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/hybrid', hybridRoutes);
+app.use('/api/authors', authorRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -72,7 +75,7 @@ app.use((req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(err.status || 500).json({ 
+  res.status(err.status || 500).json({
     error: err.message || 'Something went wrong!',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });

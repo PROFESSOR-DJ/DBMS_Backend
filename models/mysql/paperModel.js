@@ -4,18 +4,64 @@ class PaperModel {
   // Create paper
   static async create(paper) {
     const connection = await getMySQL();
-    const { paper_id, title, year, journal } = paper;
+    const { paper_id, title, year, journal, doi, is_covid19, has_full_text, authors, abstract } = paper;
 
-    // Lookup journal_id
-    let journal_id = null;
-    if (journal) {
-      const [rows] = await connection.execute('SELECT journal_id FROM journals WHERE journal_name = ?', [journal]);
-      if (rows.length > 0) journal_id = rows[0].journal_id;
+    // Start transaction
+    await connection.beginTransaction();
+
+    try {
+      // Lookup journal_id
+      let journal_id = null;
+      if (journal) {
+        const [rows] = await connection.execute('SELECT journal_id FROM journals WHERE journal_name = ?', [journal]);
+        if (rows.length > 0) {
+          journal_id = rows[0].journal_id;
+        } else {
+          // Create journal if not exists (Optional, but good for data integrity)
+          const [jResult] = await connection.execute('INSERT INTO journals (journal_name) VALUES (?)', [journal]);
+          journal_id = jResult.insertId;
+        }
+      }
+
+      const query = `
+        INSERT INTO papers (paper_id, title, abstract, publish_year, doi, journal_id, is_covid19, has_full_text) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+      // Use provided paper_id or generate one if needed (assuming user provides unique ID or logic exists elsewhere)
+      // For now, allow paper_id to be passed.
+      const [result] = await connection.execute(query, [paper_id, title, abstract, year, doi, journal_id, is_covid19 || false, has_full_text || false]);
+
+      // Insert paper metrics (default values)
+      await connection.execute('INSERT INTO paper_metrics (paper_id, author_count, abstract_word_count, paper_age) VALUES (?, ?, ?, ?)',
+        [paper_id, authors ? authors.length : 0, abstract ? abstract.split(/\s+/).length : 0, year ? new Date().getFullYear() - year : 0]);
+
+      // Insert authors
+      if (authors && Array.isArray(authors)) {
+        for (let i = 0; i < authors.length; i++) {
+          const authorName = authors[i];
+          let author_id;
+
+          // Check if author exists
+          const [aRows] = await connection.execute('SELECT author_id FROM authors WHERE author_name = ?', [authorName]);
+          if (aRows.length > 0) {
+            author_id = aRows[0].author_id;
+          } else {
+            const [aResult] = await connection.execute('INSERT INTO authors (author_name) VALUES (?)', [authorName]);
+            author_id = aResult.insertId;
+          }
+
+          // Link paper-author
+          await connection.execute('INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES (?, ?, ?)',
+            [paper_id, author_id, i + 1]);
+        }
+      }
+
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
     }
-
-    const query = 'INSERT INTO papers (paper_id, title, publish_year, journal_id) VALUES (?, ?, ?, ?)';
-    const [result] = await connection.execute(query, [paper_id, title, year, journal_id]);
-    return result;
   }
 
   // Get all papers with sorting - OPTIMIZED
@@ -494,9 +540,23 @@ class PaperModel {
       fields.push('publish_year = ?');
       values.push(parseInt(updates.year, 10));
     }
+    if (updates.is_covid19 !== undefined) {
+      fields.push('is_covid19 = ?');
+      values.push(updates.is_covid19);
+    }
+    if (updates.doi !== undefined) {
+      fields.push('doi = ?');
+      values.push(updates.doi);
+    }
+    if (updates.abstract !== undefined) {
+      fields.push('abstract = ?');
+      values.push(updates.abstract);
+    }
+
+    // Handle journal update if needed
     if (updates.journal !== undefined) {
-      // We'd need to lookup journal_id here too, but for now assuming simple update not supported or complicated
-      // fields.push('journal_id = ?'); 
+      // This would require journal lookup/creation logic similar to create
+      // For now, skipping complex relation update here to keep valid SQL simple or add later
     }
 
     if (fields.length === 0) {
@@ -515,6 +575,14 @@ class PaperModel {
     const query = 'DELETE FROM papers WHERE paper_id = ?';
     const [result] = await connection.execute(query, [paper_id]);
     return result;
+  }
+
+  // Get average abstract word count
+  static async getAvgAbstractWordCount() {
+    const connection = await getMySQL();
+    const query = 'SELECT AVG(abstract_word_count) as avg_count FROM paper_metrics';
+    const [rows] = await connection.execute(query);
+    return rows[0].avg_count;
   }
 }
 

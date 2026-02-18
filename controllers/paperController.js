@@ -322,19 +322,8 @@ const createPaper = async (req, res) => {
     // MongoDB: Full document for search and analytics
 
     // Step 1: Create in SQL (normalized schema with constraints)
+    // PaperModel.create now handles transaction including journals, authors, and metrics
     const mysqlResult = await PaperModel.create(paper);
-
-    // Step 2: Create author relationships in SQL
-    if (paper.authors && Array.isArray(paper.authors)) {
-      for (const authorName of paper.authors) {
-        let author = await AuthorModel.findByName(authorName);
-        if (!author) {
-          const authorResult = await AuthorModel.create({ author_name: authorName });
-          author = { author_id: authorResult.insertId, author_name: authorName };
-        }
-        await PaperAuthorModel.create(paper.paper_id, author.author_id);
-      }
-    }
 
     // Step 3: Create in MongoDB (full document with metadata)
     // let mongoResult = { insertedId: null };
@@ -419,24 +408,7 @@ const addPapersBulk = async (req, res) => {
       try {
         await PaperModel.create(paper);
         insertedCount++;
-
-        if (paper.authors) {
-          for (const authorName of paper.authors) {
-            let author = await AuthorModel.findByName(authorName);
-            if (!author) {
-              const authorResult = await AuthorModel.create({ name: authorName }); // Note: AuthorModel.create now expects author_name but helper wrapper might handle it or we updated it? 
-              // Wait, I updated AuthorModel.create to expect 'author_name' in Step 162. 
-              // The object passed here is { name: authorName }.
-              // Let's check AuthorModel.create signature again to be safe.
-              // In Step 162: const { author_name } = author;
-              // So passing { name: authorName } will fail destructuring if it expects author_name.
-              // I should update this to { author_name: authorName }.
-
-              author = { author_id: authorResult.insertId, author_name: authorName };
-            }
-            await PaperAuthorModel.create(paper.paper_id, author.author_id);
-          }
-        }
+        // Authors are handled by PaperModel.create now if passed in paper object
       } catch (e) {
         console.error(`Failed to insert paper ${paper.paper_id}:`, e.message);
       }
