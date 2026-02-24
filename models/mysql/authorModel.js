@@ -5,33 +5,38 @@ class AuthorModel {
   // Create author with optional paper link
   static async create(author) {
     const { author_name, paper_id } = author;
-    const connection = await getMySQL();
+    const pool = getMySQL();
+    const connection = await pool.getConnection();
 
-    if (paper_id) {
-      await connection.beginTransaction();
-      try {
-        // 1. Create Author
-        const [result] = await connection.execute('INSERT INTO authors (author_name) VALUES (?)', [author_name]);
-        const author_id = result.insertId;
+    try {
+      if (paper_id) {
+        await connection.beginTransaction();
+        try {
+          // 1. Create Author
+          const [result] = await connection.execute('INSERT INTO authors (author_name) VALUES (?)', [author_name]);
+          const author_id = result.insertId;
 
-        // 2. Link object to Paper
-        // Get next author_order
-        const [rows] = await connection.execute('SELECT MAX(author_order) as max_order FROM paper_authors WHERE paper_id = ?', [paper_id]);
-        const nextOrder = (rows[0].max_order || 0) + 1;
+          // 2. Link object to Paper
+          // Get next author_order
+          const [rows] = await connection.execute('SELECT MAX(author_order) as max_order FROM paper_authors WHERE paper_id = ?', [paper_id]);
+          const nextOrder = (rows[0].max_order || 0) + 1;
 
-        await connection.execute('INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES (?, ?, ?)',
-          [paper_id, author_id, nextOrder]);
+          await connection.execute('INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES (?, ?, ?)',
+            [paper_id, author_id, nextOrder]);
 
-        await connection.commit();
+          await connection.commit();
+          return result;
+        } catch (error) {
+          await connection.rollback();
+          throw error;
+        }
+      } else {
+        const query = 'INSERT INTO authors (author_name) VALUES (?)';
+        const [result] = await connection.execute(query, [author_name]);
         return result;
-      } catch (error) {
-        await connection.rollback();
-        throw error;
       }
-    } else {
-      const query = 'INSERT INTO authors (author_name) VALUES (?)';
-      const [result] = await connection.execute(query, [author_name]);
-      return result;
+    } finally {
+      connection.release();
     }
   }
 
