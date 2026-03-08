@@ -568,6 +568,32 @@ class PaperDocument {
     
     return cursor.toArray();
   }
+
+  // Update paper document
+  async update(paper_id, updates) {
+    const collection = this.getCollection();
+    
+    const updateDoc = {
+      ...updates,
+      updated_at: new Date()
+    };
+    
+    const result = await collection.updateOne(
+      { paper_id: paper_id },
+      { $set: updateDoc }
+    );
+    
+    return result;
+  }
+
+  // Delete paper document
+  async delete(paper_id) {
+    const collection = this.getCollection();
+    
+    const result = await collection.deleteOne({ paper_id: paper_id });
+    
+    return result;
+  }
 }
 
 module.exports = PaperDocument;

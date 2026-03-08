@@ -13,7 +13,7 @@ const getOverview = async (req, res) => {
   try {
     // OPTIMIZED: Run queries in parallel
     // OPTIMIZED: Run queries in parallel
-    const [mysqlStats, /*mongoStats,*/ papersPerYear, topJournals, topAuthors] = await Promise.all([
+    const [mysqlStats, mongoStats, papersPerYear, topJournals, topAuthors] = await Promise.all([
       // SQL stats (OPTIMIZED: Simple COUNT queries on indexed PKs)
       (async () => {
         const totalPapers = await PaperModel.count();
@@ -23,20 +23,20 @@ const getOverview = async (req, res) => {
       })(),
 
       // MongoDB stats (OPTIMIZED: Single aggregation pipeline)
-      // paperDocument.getStats(),
+      paperDocument.getStats(),
 
       // MongoDB aggregation (OPTIMIZED: Group by year with index)
-      PaperModel.getYearStats(), // Replaced mongo: paperDocument.getPapersPerYear(),
+      paperDocument.getPapersPerYear(),
 
       // MongoDB aggregation (OPTIMIZED: Group by journal, limit 10)
-      PaperModel.getTopJournals(10), // Replaced mongo: paperDocument.getTopJournals(10),
+      paperDocument.getTopJournals(10),
 
       // MongoDB aggregation (OPTIMIZED: Unwind + group, limit 10)
-      AuthorModel.getTopAuthors(10) // Replaced mongo: paperDocument.getTopAuthors(10)
+      paperDocument.getTopAuthors(10)
     ]);
 
-    // Placeholder for commented out mongoStats
-    const mongoStats = { totalPapers: 0, uniqueJournalCount: 0, uniqueAuthorCount: 0, avgCitations: 0 };
+    // Use actual mongoStats from MongoDB
+    // const mongoStats = { totalPapers: 0, uniqueJournalCount: 0, uniqueAuthorCount: 0, avgCitations: 0 };
 
     res.json({
       database_overview: {
@@ -47,10 +47,10 @@ const getOverview = async (req, res) => {
           role: 'Normalized relational data with referential integrity'
         },
         mongodb: {
-          total_papers: mongoStats.totalPapers || 0,
-          unique_journals: mongoStats.uniqueJournalCount || 0,
-          unique_authors: mongoStats.uniqueAuthorCount || 0,
-          avg_citations: mongoStats.avgCitations || 0,
+          total_papers: mongoStats.totalPapers,
+          unique_journals: mongoStats.uniqueJournalCount,
+          unique_authors: mongoStats.uniqueAuthorCount,
+          avg_citations: mongoStats.avgCitations,
           role: 'Document storage, full-text search, aggregation analytics'
         }
       },
@@ -113,13 +113,13 @@ const getJournalStats = async (req, res) => {
       return res.status(400).json({ error: 'Invalid limit parameter (1-1000)' });
     }
 
-    // DECISION: Use MySQL for journal aggregation (forced)
-    const journals = await PaperModel.getTopJournals(limit); // Switched to MySQL
+    // DECISION: Use MongoDB for journal aggregation (optimized aggregation pipeline)
+    const journals = await paperDocument.getTopJournals(limit);
 
     res.json({
       journals,
       count: journals.length,
-      source: 'mysql', // Changed to mysql as per instruction
+      source: 'mongodb',
       reason: 'MongoDB aggregation pipeline optimized for grouping',
       optimization: 'Single-pass aggregation: $group by journal, $sort by count, $limit',
       pipeline: '[{$group: {_id: "$journal", count: {$sum: 1}}}, {$sort: {count: -1}}, {$limit: N}]'
@@ -135,12 +135,12 @@ const getJournalStats = async (req, res) => {
  */
 const getPapersPerYear = async (req, res) => {
   try {
-    // DECISION: Use MySQL for year aggregation (forced)
-    const data = await PaperModel.getYearStats(); // Switched to MySQL
+    // DECISION: Use MongoDB for year aggregation (indexed aggregation)
+    const data = await paperDocument.getPapersPerYear();
 
     res.json({
       papers_per_year: data,
-      source: 'mysql', // Changed to mysql as per instruction
+      source: 'mongodb',
       reason: 'MongoDB year index enables fast grouping',
       optimization: 'Index-covered query on year field',
       analysis: 'Shows publication trends over time'
