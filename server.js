@@ -8,7 +8,8 @@ dotenv.config();
 
 const { connectMySQL, connectMongoDB }           = require('./config/database');
 const { errorMiddleware, notFoundMiddleware }     = require('./middleware/errorMiddleware');
-
+const { connectNeo4j }   = require('./config/neo4jDatabase');
+const graphRoutes        = require('./routes/graphRoutes');
 const authRoutes   = require('./routes/authRoutes');
 const paperRoutes  = require('./routes/paperRoutes');
 const statsRoutes  = require('./routes/statsRoutes');
@@ -32,10 +33,10 @@ const initDatabases = async () => {
   try {
     await connectMySQL();
     await connectMongoDB();
+    await connectNeo4j();           // ← ADD THIS LINE
     console.log('✅ All databases connected successfully');
   } catch (error) {
     console.error('❌ Database connection failed:', error.message);
-    // Don't exit — let the app run with whatever connected
   }
 };
 
@@ -47,7 +48,7 @@ app.use('/api/papers',  paperRoutes);
 app.use('/api/stats',   statsRoutes);
 app.use('/api/hybrid',  hybridRoutes);
 app.use('/api/authors', authorRoutes);
-
+app.use('/api/graph',   graphRoutes);
 // ── Health check ──
 app.get('/api/health', (req, res) => {
   res.status(200).json({
@@ -58,7 +59,7 @@ app.get('/api/health', (req, res) => {
       mysql:      'connected',
       mongodb:    'connected',
       postgresql: 'to_be_implemented',
-      neo4j:      'to_be_implemented',
+      neo4j:      'connected',
     },
   });
 });
