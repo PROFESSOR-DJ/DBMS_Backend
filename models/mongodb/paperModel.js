@@ -1,3 +1,4 @@
+// paperModel defines the backend MongoDB schema and operations for papers.
 const { getMongoDB } = require('../../config/database');
 const { ObjectId } = require('mongodb');
 
@@ -11,7 +12,7 @@ class PaperDocument {
     }
   }
 
-  // Create paper document
+  
   async create(paper) {
     const collection = this.getCollection();
     
@@ -37,7 +38,7 @@ class PaperDocument {
     return result;
   }
 
-  // Get all papers with sorting
+  
   async findAll(limit = 100, skip = 0, sortBy = 'recent') {
     const collection = this.getCollection();
     
@@ -56,27 +57,27 @@ class PaperDocument {
     return cursor.toArray();
   }
 
-  // ── KEY FIX: Get paper by ID ──
-  // Tries paper_id first (string), then MongoDB _id (ObjectId)
+  
+  
   async findById(id) {
     const collection = this.getCollection();
 
-    // 1. Try exact match on paper_id field (e.g. "5tkvsudh")
+    
     let paper = await collection.findOne({ paper_id: id });
     if (paper) return paper;
 
-    // 2. Try MongoDB ObjectId (e.g. "6989e9ca1aa21f736ab8512d")
+    
     if (ObjectId.isValid(id)) {
       paper = await collection.findOne({ _id: new ObjectId(id) });
       if (paper) return paper;
     }
 
-    // 3. Try case-insensitive paper_id match as fallback
+    
     paper = await collection.findOne({ paper_id: { $regex: `^${id}$`, $options: 'i' } });
     return paper || null;
   }
 
-  // Advanced search with multiple filters
+  
   async advancedSearch(params) {
     const collection = this.getCollection();
     const {
@@ -142,7 +143,7 @@ class PaperDocument {
     return { papers, total };
   }
 
-  // Search papers by text index
+  
   async searchText(query, limit = 50) {
     const collection = this.getCollection();
     try {

@@ -1,8 +1,9 @@
+// database config creates backend MySQL and MongoDB connections.
 const mysql = require('mysql2/promise');
 const { MongoClient } = require('mongodb');
 require('dotenv').config();
 
-// MySQL Connection
+
 let mysqlPool;
 
 const connectMySQL = async () => {
@@ -18,7 +19,7 @@ const connectMySQL = async () => {
       queueLimit: 0
     });
 
-    // Test connection
+    
     const connection = await mysqlPool.getConnection();
     console.log('✅ MySQL database connected successfully');
     console.log(`   Database: ${process.env.MYSQL_DATABASE || 'research_sql'}`);
@@ -29,8 +30,6 @@ const connectMySQL = async () => {
     return false;
   }
 };
-
-// MongoDB Connection
 let mongoClient;
 let mongoDB;
 
@@ -53,16 +52,10 @@ const connectMongoDB = async () => {
     mongoClient = new MongoClient(uri);
     await mongoClient.connect();
     mongoDB = mongoClient.db(dbName);
-
-    // Test connection
     await mongoDB.command({ ping: 1 });
     console.log('✅ MongoDB database connected successfully');
-
-    // Create indexes for better performance
     try {
       const papersCollection = mongoDB.collection('papers');
-
-      // Check existing indexes
       const existingIndexes = await papersCollection.indexes();
       const hasTextIndex = existingIndexes.some(idx => idx.name === 'text_search' || (idx.key && idx.key._fts === 'text'));
 
@@ -73,8 +66,6 @@ const connectMongoDB = async () => {
         );
         console.log('   ✓ Created text search index');
       }
-
-      // Create other indexes if they don't exist
       await papersCollection.createIndex({ paper_id: 1 }, { unique: true, name: 'idx_paper_id' });
       await papersCollection.createIndex({ journal: 1 }, { name: 'idx_journal' });
       await papersCollection.createIndex({ year: 1 }, { name: 'idx_year' });
@@ -94,8 +85,6 @@ const connectMongoDB = async () => {
     return false;
   }
 };
-
-// Get database instances
 const getMySQL = () => {
   if (!mysqlPool) {
     throw new Error('MySQL pool not initialized. Call connectMySQL() first.');
@@ -113,8 +102,6 @@ const getMongoDB = () => {
 const isMongoDBConnected = () => {
   return !!mongoDB;
 };
-
-// Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
   if (mysqlPool) {
@@ -135,3 +122,4 @@ module.exports = {
   getMongoDB,
   isMongoDBConnected
 };
+

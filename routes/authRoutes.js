@@ -1,9 +1,10 @@
+// authRoutes maps authentication endpoints to backend auth handlers.
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const authController = require('../controllers/authController');
 
-// Validation rules
+
 const registerValidation = [
   body('name').notEmpty().withMessage('Name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -15,7 +16,7 @@ const loginValidation = [
   body('password').notEmpty().withMessage('Password is required')
 ];
 
-// Routes
+
 router.post('/register', registerValidation, authController.register);
 router.post('/login', loginValidation, authController.login);
 router.post('/forgot-password', authController.forgotPassword);

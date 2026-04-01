@@ -1,22 +1,14 @@
-/**
- * controllers/neo4jController.js
- *
- * All Neo4j graph queries for the Research Knowledge Graph.
- * Schema:
- *   (Author)-[:WROTE]->(Paper)-[:PUBLISHED_IN]->(Journal)
- *   (Paper)-[:FROM_SOURCE]->(Source)
- *   (Paper)-[:PUBLISHED_YEAR]->(Year)
- */
+// neo4jController handles backend graph analytics and network requests.
 const { runQuery, isNeo4jConnected } = require('../config/neo4jDatabase');
 const { asyncHandler, AppError }     = require('../utils/errorHandler');
 
-/* ─────────────────────────────────────────
-   Helper — convert Neo4j Integer to JS number
-───────────────────────────────────────── */
+
+
+
 const toNum = (val) => {
   if (val === null || val === undefined) return 0;
   if (typeof val === 'number') return val;
-  // neo4j.Integer
+  
   if (typeof val.toNumber === 'function') return val.toNumber();
   return Number(val);
 };
@@ -27,10 +19,10 @@ const guardNeo4j = () => {
   }
 };
 
-/* ─────────────────────────────────────────
-   GET /api/graph/stats
-   Overview counts for the graph dashboard
-───────────────────────────────────────── */
+
+
+
+
 const getGraphStats = asyncHandler(async (req, res) => {
   guardNeo4j();
 
@@ -71,16 +63,16 @@ const getGraphStats = asyncHandler(async (req, res) => {
   });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/author-network/:name
-   Co-author network for a given author
-───────────────────────────────────────── */
+
+
+
+
 const getAuthorNetwork = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { name } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
 
-  // Find all authors who share at least one paper with the target author
+  
   const records = await runQuery(
     `
     MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)<-[:WROTE]-(coAuthor:Author)
@@ -100,7 +92,7 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
     samplePapers: r.get('samplePapers'),
   }));
 
-  // Also get the author's own papers
+  
   const paperRecords = await runQuery(
     `
     MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)
@@ -132,10 +124,10 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
   });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/top-authors?limit=10
-   Authors ranked by paper count
-───────────────────────────────────────── */
+
+
+
+
 const getTopAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
@@ -158,10 +150,10 @@ const getTopAuthors = asyncHandler(async (req, res) => {
   res.json({ authors, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/top-journals?limit=10
-   Journals ranked by paper count
-───────────────────────────────────────── */
+
+
+
+
 const getTopJournals = asyncHandler(async (req, res) => {
   guardNeo4j();
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
@@ -184,10 +176,10 @@ const getTopJournals = asyncHandler(async (req, res) => {
   res.json({ journals, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/papers-by-year
-   Papers grouped by publication year
-───────────────────────────────────────── */
+
+
+
+
 const getPapersByYear = asyncHandler(async (req, res) => {
   guardNeo4j();
 
@@ -205,10 +197,10 @@ const getPapersByYear = asyncHandler(async (req, res) => {
   res.json({ papersPerYear: data, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/papers-by-source
-   Papers grouped by source dataset
-───────────────────────────────────────── */
+
+
+
+
 const getPapersBySource = asyncHandler(async (req, res) => {
   guardNeo4j();
 
@@ -226,10 +218,10 @@ const getPapersBySource = asyncHandler(async (req, res) => {
   res.json({ sources: data, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/author-papers/:name
-   All papers written by an author
-───────────────────────────────────────── */
+
+
+
+
 const getAuthorPapers = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { name } = req.params;
@@ -260,10 +252,10 @@ const getAuthorPapers = asyncHandler(async (req, res) => {
   res.json({ author: name, papers, count: papers.length, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/journal-authors/:journal
-   Top authors in a specific journal
-───────────────────────────────────────── */
+
+
+
+
 const getJournalAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { journal } = req.params;
@@ -289,10 +281,10 @@ const getJournalAuthors = asyncHandler(async (req, res) => {
   res.json({ journal, authors, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/search-authors?q=
-   Author name search
-───────────────────────────────────────── */
+
+
+
+
 const searchAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { q } = req.query;
@@ -319,10 +311,10 @@ const searchAuthors = asyncHandler(async (req, res) => {
   res.json({ query: q, authors, source: 'neo4j' });
 });
 
-/* ─────────────────────────────────────────
-   GET /api/graph/health
-   Neo4j connectivity check
-───────────────────────────────────────── */
+
+
+
+
 const getHealth = asyncHandler(async (req, res) => {
   if (!isNeo4jConnected()) {
     return res.status(503).json({ status: 'disconnected', message: 'Neo4j is not connected.' });
@@ -335,7 +327,7 @@ const getHealth = asyncHandler(async (req, res) => {
   }
 });
 
-// neo4j-driver requires integers as neo4j.Integer for LIMIT/SKIP params
+
 const neo4jInt = (n) => require('neo4j-driver').int(n);
 
 module.exports = {

@@ -1,3 +1,4 @@
+// statsController handles backend statistics and dashboard requests.
 const PaperModel     = require('../models/mysql/paperModel');
 const AuthorModel    = require('../models/mysql/authorModel');
 const PaperDocument  = require('../models/mongodb/paperModel');
@@ -5,11 +6,11 @@ const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler
 
 const paperDocument = new PaperDocument();
 
-/**
- * GET /api/stats/overview
- * HYBRID: SQL for entity counts, MongoDB for analytics.
- * All queries run in parallel for performance.
- */
+
+
+
+
+
 const getOverview = asyncHandler(async (req, res) => {
   const [mysqlStats, mongoStats, papersPerYear, topJournals, topAuthors] = await Promise.all([
     (async () => {
@@ -98,10 +99,10 @@ const getOverview = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/stats/authors
- * SQL — normalised many-to-many relationship counts.
- */
+
+
+
+
 const getAuthorStats = asyncHandler(async (req, res) => {
   const limit = Number(req.query.limit) || 50;
 
@@ -126,10 +127,10 @@ const getAuthorStats = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/stats/journals
- * MongoDB — aggregation pipeline.
- */
+
+
+
+
 const getJournalStats = asyncHandler(async (req, res) => {
   const limit = Number(req.query.limit) || 50;
 
@@ -154,10 +155,10 @@ const getJournalStats = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/stats/papers-per-year
- * MongoDB — indexed year aggregation.
- */
+
+
+
+
 const getPapersPerYear = asyncHandler(async (req, res) => {
   let data;
   try {
@@ -175,9 +176,9 @@ const getPapersPerYear = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/stats/database-info
- */
+
+
+
 const getDatabaseInfo = asyncHandler(async (req, res) => {
   res.json({
     hybrid_database_architecture: {
@@ -239,9 +240,9 @@ const getDatabaseInfo = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/stats/query-performance
- */
+
+
+
 const getQueryPerformance = asyncHandler(async (req, res) => {
   res.json({
     query_performance_comparison: {

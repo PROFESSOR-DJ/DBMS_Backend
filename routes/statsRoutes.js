@@ -1,10 +1,11 @@
+// statsRoutes maps statistics endpoints to backend stats handlers.
 const express = require('express');
 const router = express.Router();
 const statsController = require('../controllers/statsController');
 const authController = require('../controllers/authController');
 
-// All stats routes are protected
-// router.use(authController.authenticate);
+
+
 
 router.get('/overview', statsController.getOverview);
 router.get('/authors', statsController.getAuthorStats);

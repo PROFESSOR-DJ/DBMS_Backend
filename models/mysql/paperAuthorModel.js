@@ -1,14 +1,15 @@
+// paperAuthorModel manages backend MySQL paper-author relationship records.
 const { getMySQL } = require('../../config/database');
 
 class PaperAuthorModel {
-  // Create paper-author relationship
+  
   static async create(paper_id, author_id) {
     const query = 'INSERT INTO paper_authors (paper_id, author_id) VALUES (?, ?)';
     const [result] = await (await getMySQL()).execute(query, [paper_id, author_id]);
     return result;
   }
 
-  // Get authors of a paper
+  
   static async getAuthorsByPaper(paper_id) {
     const query = `
       SELECT a.author_id, a.name
@@ -20,7 +21,7 @@ class PaperAuthorModel {
     return rows;
   }
 
-  // Get papers by an author
+  
   static async getPapersByAuthor(author_id) {
     const query = `
       SELECT p.paper_id, p.title, p.year, p.journal
@@ -33,7 +34,7 @@ class PaperAuthorModel {
     return rows;
   }
 
-  // Check if relationship exists
+  
   static async exists(paper_id, author_id) {
     const query = 'SELECT 1 FROM paper_authors WHERE paper_id = ? AND author_id = ?';
     const [rows] = await (await getMySQL()).execute(query, [paper_id, author_id]);

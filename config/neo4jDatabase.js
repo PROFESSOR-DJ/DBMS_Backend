@@ -1,7 +1,4 @@
-/**
- * config/neo4jDatabase.js
- * Neo4j driver — mirrors the style of config/database.js
- */
+// neo4jDatabase creates and manages the backend Neo4j connection.
 const neo4j = require('neo4j-driver');
 
 let driver = null;
@@ -14,7 +11,7 @@ const connectNeo4j = async () => {
 
     driver = neo4j.driver(uri, neo4j.auth.basic(user, password));
 
-    // Verify connectivity
+    
     await driver.verifyConnectivity();
     console.log('✅ Neo4j database connected successfully');
     console.log(`   URI: ${uri}`);
@@ -27,10 +24,10 @@ const connectNeo4j = async () => {
   }
 };
 
-/**
- * Returns a new session.
- * Always close sessions after use: session.close()
- */
+
+
+
+
 const getNeo4jSession = () => {
   if (!driver) throw new Error('Neo4j driver not initialised. Call connectNeo4j() first.');
   return driver.session({ database: process.env.NEO4J_DATABASE || 'neo4j' });
@@ -38,7 +35,7 @@ const getNeo4jSession = () => {
 
 const isNeo4jConnected = () => !!driver;
 
-// Helper — run a query and auto-close the session
+
 const runQuery = async (cypher, params = {}) => {
   const session = getNeo4jSession();
   try {
@@ -49,7 +46,7 @@ const runQuery = async (cypher, params = {}) => {
   }
 };
 
-// Graceful shutdown
+
 process.on('SIGINT', async () => {
   if (driver) {
     await driver.close();

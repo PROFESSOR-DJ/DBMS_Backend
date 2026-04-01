@@ -1,3 +1,4 @@
+// test_mongodb_data checks MongoDB paper records directly from the backend environment.
 require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
@@ -17,13 +18,13 @@ const { MongoClient } = require('mongodb');
     
     const db = client.db(dbName);
     
-    // Check collections
+    
     const collections = await db.listCollections().toArray();
     console.log('📋 Collections in database:');
     collections.forEach(col => console.log(`   - ${col.name}`));
     console.log();
     
-    // Check papers collection
+    
     const papersCollection = db.collection('papers');
     const paperCount = await papersCollection.countDocuments();
     console.log(`📄 Papers collection: ${paperCount} documents`);
@@ -42,7 +43,7 @@ const { MongoClient } = require('mongodb');
       console.log('   Run: npm run seed:mongo to load sample data');
     }
     
-    // Test advanced search
+    
     console.log('\n🔍 Testing advanced search...');
     const searchResult = await papersCollection.find({ 
       title: { $regex: '', $options: 'i' }

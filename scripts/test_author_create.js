@@ -1,3 +1,4 @@
+// test_author_create exercises backend author creation logic from a script.
 const { connectMySQL, getMySQL } = require('../config/database');
 const AuthorModel = require('../models/mysql/authorModel');
 
@@ -10,15 +11,15 @@ async function test() {
             return;
         }
 
-        // 1. Test creation without paper_id
+        
         console.log('\nCase 1: Creating author without paper_id');
         const authorName1 = 'Test Author ' + Date.now();
         const result1 = await AuthorModel.create({ author_name: authorName1 });
         console.log('✓ Created author 1:', result1.insertId);
 
-        // 2. Test creation with paper_id
-        // First, let's find a valid paper_id if possible, or just use a dummy one if we are sure it exists
-        // For safety, let's query for one
+        
+        
+        
         const pool = getMySQL();
         const [papers] = await pool.execute('SELECT paper_id FROM papers LIMIT 1');
 

@@ -1,3 +1,4 @@
+// check_mongo_data inspects MongoDB paper data for backend verification.
 require('dotenv').config();
 const { MongoClient } = require('mongodb');
 

@@ -1,8 +1,9 @@
+// seedData inserts backend sample records into the configured databases.
 const { connectMySQL, connectMongoDB, getMySQL, getMongoDB } = require('../config/database');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
-// WARNING BANNER
+
 console.log('\n⚠️  ═══════════════════════════════════════════════════════════ ⚠️');
 console.log('⚠️  WARNING: This script will DELETE ALL existing data!        ⚠️');
 console.log('⚠️  This should ONLY be used for development/testing.          ⚠️');
@@ -47,7 +48,7 @@ const seedMySQL = async () => {
   try {
     console.log('🌱 Seeding MySQL database...');
     
-    // Clear existing data
+    
     await connection.execute('SET FOREIGN_KEY_CHECKS = 0');
     await connection.execute('TRUNCATE TABLE paper_author');
     await connection.execute('TRUNCATE TABLE author');
@@ -57,7 +58,7 @@ const seedMySQL = async () => {
     
     console.log('   ✓ Cleared existing data');
     
-    // Add sample papers
+    
     for (const paper of samplePapers) {
       await connection.execute(
         'INSERT INTO paper (paper_id, title, year, journal) VALUES (?, ?, ?, ?)',
@@ -90,7 +91,7 @@ const seedMySQL = async () => {
     
     console.log(`   ✓ Added ${samplePapers.length} sample papers`);
     
-    // Add test user
+    
     const password_hash = await bcrypt.hash('password123', 10);
     await connection.execute(
       'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
@@ -144,7 +145,7 @@ const seedMongoDB = async () => {
 const main = async () => {
   console.log('\n🚀 Database Seed Script\n');
   
-  // Ask for confirmation
+  
   const confirmed = await askConfirmation();
   
   if (!confirmed) {

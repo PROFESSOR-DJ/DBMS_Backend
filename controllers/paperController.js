@@ -1,3 +1,4 @@
+// paperController handles backend paper CRUD and lookup requests.
 const PaperModel       = require('../models/mysql/paperModel');
 const AuthorModel      = require('../models/mysql/authorModel');
 const PaperAuthorModel = require('../models/mysql/paperAuthorModel');
@@ -7,9 +8,9 @@ const { AppError, classifyError, asyncHandler, sendError } = require('../utils/e
 
 const paperDocument = new PaperDocument();
 
-/**
- * Get all papers — MongoDB (flexible schema, fast retrieval)
- */
+
+
+
 const getAllPapers = asyncHandler(async (req, res) => {
   const limit  = parseInt(req.query.limit, 10) || 20;
   const page   = parseInt(req.query.page,  10) || 1;
@@ -28,9 +29,9 @@ const getAllPapers = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get paper by ID — MongoDB primary, optional SQL enrichment
- */
+
+
+
 const getPaperById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -47,9 +48,9 @@ const getPaperById = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Search papers — MongoDB full-text search
- */
+
+
+
 const searchPapers = asyncHandler(async (req, res) => {
   const {
     q, yearFrom, yearTo, journal, author,
@@ -91,9 +92,9 @@ const searchPapers = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get papers by year
- */
+
+
+
 const getPapersByYear = asyncHandler(async (req, res) => {
   const { year } = req.params;
   const yearInt  = parseInt(year, 10);
@@ -111,9 +112,9 @@ const getPapersByYear = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get papers by journal
- */
+
+
+
 const getPapersByJournal = asyncHandler(async (req, res) => {
   const { journal } = req.params;
 
@@ -126,9 +127,9 @@ const getPapersByJournal = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get papers by author — MongoDB
- */
+
+
+
 const getPapersByAuthor = asyncHandler(async (req, res) => {
   const { author } = req.params;
 
@@ -142,9 +143,9 @@ const getPapersByAuthor = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get filter options
- */
+
+
+
 const getFilterOptions = asyncHandler(async (req, res) => {
   const filterOptions = await paperDocument.getFilterOptions();
 
@@ -155,9 +156,9 @@ const getFilterOptions = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Get search suggestions
- */
+
+
+
 const getSuggestions = asyncHandler(async (req, res) => {
   const { q, type = 'all' } = req.query;
 
@@ -174,9 +175,9 @@ const getSuggestions = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Create paper — write to both databases
- */
+
+
+
 const createPaper = asyncHandler(async (req, res) => {
   const paper = req.body;
 
@@ -184,23 +185,23 @@ const createPaper = asyncHandler(async (req, res) => {
     throw new AppError('Fields paper_id and title are required.', 400, 'MISSING_FIELDS');
   }
 
-  // ── MongoDB insert ──
+  
   let mongoResult = { insertedId: null };
   try {
     mongoResult = await paperDocument.create(paper);
   } catch (mongoErr) {
-    // Re-throw as AppError with proper status
+    
     throw classifyError(mongoErr);
   }
 
-  // ── MySQL insert ──
+  
   let mysqlResult = { insertId: null };
   try {
     mysqlResult = await PaperModel.create(paper);
   } catch (mysqlErr) {
     const appErr = classifyError(mysqlErr);
-    // 409 Duplicate in MySQL after MongoDB succeeded — still a valid partial insert;
-    // surface the conflict clearly.
+    
+    
     if (appErr.code === 'DUPLICATE_ENTRY') {
       return res.status(409).json({
         error:   appErr.message,
@@ -209,7 +210,7 @@ const createPaper = asyncHandler(async (req, res) => {
         mongodb_insert_id: mongoResult.insertedId,
       });
     }
-    // Other MySQL errors: log and continue (MongoDB is primary)
+    
     console.warn('MySQL paper insert warning:', appErr.message);
   }
 
@@ -222,9 +223,9 @@ const createPaper = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Update paper — update both databases
- */
+
+
+
 const updatePaper = asyncHandler(async (req, res) => {
   const { id }    = req.params;
   const updates   = req.body;
@@ -233,7 +234,7 @@ const updatePaper = asyncHandler(async (req, res) => {
     throw new AppError('No update fields provided.', 400, 'MISSING_FIELDS');
   }
 
-  // ── MongoDB update ──
+  
   try {
     const result = await paperDocument.update(id, updates);
     if (result.matchedCount === 0) {
@@ -244,7 +245,7 @@ const updatePaper = asyncHandler(async (req, res) => {
     throw classifyError(err);
   }
 
-  // ── MySQL update (non-fatal if it fails) ──
+  
   try {
     await PaperModel.update(id, updates);
   } catch (mysqlErr) {
@@ -254,13 +255,13 @@ const updatePaper = asyncHandler(async (req, res) => {
   res.json({ message: 'Paper updated.', paper_id: id, updates });
 });
 
-/**
- * Delete paper — delete from both databases
- */
+
+
+
 const deletePaper = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // ── MongoDB delete ──
+  
   try {
     const result = await paperDocument.delete(id);
     if (result.deletedCount === 0) {
@@ -271,12 +272,12 @@ const deletePaper = asyncHandler(async (req, res) => {
     throw classifyError(err);
   }
 
-  // ── MySQL delete (non-fatal) ──
+  
   try {
     await PaperModel.delete(id);
   } catch (mysqlErr) {
     const appErr = classifyError(mysqlErr);
-    // FK violation — child rows exist; warn but don't fail (MongoDB already deleted)
+    
     if (appErr.code === 'FK_REFERENCE_EXISTS') {
       console.warn(`MySQL delete FK warning for paper '${id}':`, appErr.message);
     } else {
@@ -287,9 +288,9 @@ const deletePaper = asyncHandler(async (req, res) => {
   res.json({ message: 'Paper deleted.', paper_id: id });
 });
 
-/**
- * Bulk insert — MySQL with per-row error handling
- */
+
+
+
 const addPapersBulk = asyncHandler(async (req, res) => {
   const papers = req.body;
 
@@ -314,7 +315,7 @@ const addPapersBulk = asyncHandler(async (req, res) => {
     }
   }
 
-  const httpStatus = results.inserted > 0 ? 207 : 400;  // 207 Multi-Status for partial success
+  const httpStatus = results.inserted > 0 ? 207 : 400;  
   res.status(httpStatus).json({
     message:          'Bulk insert completed.',
     total_submitted:  papers.length,

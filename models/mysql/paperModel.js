@@ -1,23 +1,24 @@
+// paperModel manages backend MySQL paper records.
 const { getMySQL } = require('../../config/database');
 
 class PaperModel {
-  // Create paper
+  
   static async create(paper) {
     const connection = await getMySQL();
     const { paper_id, title, year, journal, doi, is_covid19, has_full_text, authors, abstract } = paper;
 
-    // Start transaction
+    
     await connection.beginTransaction();
 
     try {
-      // Lookup journal_id
+      
       let journal_id = null;
       if (journal) {
         const [rows] = await connection.execute('SELECT journal_id FROM journals WHERE journal_name = ?', [journal]);
         if (rows.length > 0) {
           journal_id = rows[0].journal_id;
         } else {
-          // Create journal if not exists (Optional, but good for data integrity)
+          
           const [jResult] = await connection.execute('INSERT INTO journals (journal_name) VALUES (?)', [journal]);
           journal_id = jResult.insertId;
         }
@@ -27,21 +28,21 @@ class PaperModel {
         INSERT INTO papers (paper_id, title, abstract, publish_year, doi, journal_id, is_covid19, has_full_text) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `;
-      // Use provided paper_id or generate one if needed (assuming user provides unique ID or logic exists elsewhere)
-      // For now, allow paper_id to be passed.
+      
+      
       const [result] = await connection.execute(query, [paper_id, title, abstract, year, doi, journal_id, is_covid19 || false, has_full_text || false]);
 
-      // Insert paper metrics (default values)
+      
       await connection.execute('INSERT INTO paper_metrics (paper_id, author_count, abstract_word_count, paper_age) VALUES (?, ?, ?, ?)',
         [paper_id, authors ? authors.length : 0, abstract ? abstract.split(/\s+/).length : 0, year ? new Date().getFullYear() - year : 0]);
 
-      // Insert authors
+      
       if (authors && Array.isArray(authors)) {
         for (let i = 0; i < authors.length; i++) {
           const authorName = authors[i];
           let author_id;
 
-          // Check if author exists
+          
           const [aRows] = await connection.execute('SELECT author_id FROM authors WHERE author_name = ?', [authorName]);
           if (aRows.length > 0) {
             author_id = aRows[0].author_id;
@@ -50,7 +51,7 @@ class PaperModel {
             author_id = aResult.insertId;
           }
 
-          // Link paper-author
+          
           await connection.execute('INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES (?, ?, ?)',
             [paper_id, author_id, i + 1]);
         }
@@ -64,11 +65,11 @@ class PaperModel {
     }
   }
 
-  // Get all papers with sorting - OPTIMIZED
+  
   static async findAll(limit = 100, offset = 0, sortBy = 'recent') {
     const connection = await getMySQL();
 
-    // ✅ FIX: Validate and convert to integers
+    
     const limitInt = parseInt(limit, 10);
     const offsetInt = parseInt(offset, 10);
 
@@ -95,8 +96,8 @@ class PaperModel {
         orderBy = 'p.publish_year DESC, p.title ASC';
     }
 
-    // ✅ FIX: Use query() with inline integers instead of execute()
-    // Join with journals and sources to get names
+    
+    
     const sql = `
       SELECT p.*, p.publish_year as year, j.journal_name as journal, s.source_name as source,
              GROUP_CONCAT(a.author_name ORDER BY pa.author_order SEPARATOR ', ') as authors
@@ -113,7 +114,7 @@ class PaperModel {
     return rows;
   }
 
-  // Get paper by ID
+  
   static async findById(paper_id) {
     const connection = await getMySQL();
     const query = `
@@ -131,7 +132,7 @@ class PaperModel {
     return rows[0];
   }
 
-  // Advanced search with multiple filters - OPTIMIZED
+  
   static async advancedSearch(params) {
     const connection = await getMySQL();
     const {
@@ -157,27 +158,27 @@ class PaperModel {
     let conditions = [];
     let queryParams = [];
 
-    // Note: Joins are already added above for selection, we don't need to add them again for filtering
-    // but the logic below conditionally added them. 
-    // Since we now ALWAYS join for selection, we can remove the conditional join logic or ensure we don't duplicate.
-    // However, if we group by paper_id, we need a.author_name usage in filtering to work correctly (it does)
+    
+    
+    
+    
 
-    /*
-    // Join with author tables if author filter is applied
-    if (author) {
-       // already joined
-    }
-    */
+    
+
+
+
+
+
 
     sql += ' WHERE 1=1';
 
-    // Text search on title
+    
     if (query) {
       conditions.push('p.title LIKE ?');
       queryParams.push(`%${query}%`);
     }
 
-    // Year range filter
+    
     if (yearFrom) {
       conditions.push('p.publish_year >= ?');
       queryParams.push(parseInt(yearFrom, 10));
@@ -188,28 +189,28 @@ class PaperModel {
       queryParams.push(parseInt(yearTo, 10));
     }
 
-    // Journal filter
+    
     if (journal) {
       conditions.push('j.journal_name LIKE ?');
       queryParams.push(`%${journal}%`);
     }
 
-    // Author filter
+    
     if (author) {
-      conditions.push('a.author_name LIKE ?'); // Updated to author_name
+      conditions.push('a.author_name LIKE ?'); 
       queryParams.push(`%${author}%`);
     }
 
-    // Add conditions to query
+    
     if (conditions.length > 0) {
       sql += ' AND ' + conditions.join(' AND ');
     }
 
-    // Get total count
+    
     const countSql = sql.replace(/SELECT DISTINCT .* FROM/, 'SELECT COUNT(DISTINCT p.paper_id) as total FROM');
-    // Note: complex replace might be needed if sql structure varies, but here it's consistent
+    
 
-    // For safer count, we can wrap or just rebuild:
+    
     const sqlCount = `
       SELECT COUNT(DISTINCT p.paper_id) as total 
       FROM papers p
@@ -222,8 +223,6 @@ class PaperModel {
 
     const [countResult] = await connection.execute(sqlCount, queryParams);
     const total = countResult[0].total;
-
-    // Sorting
     let orderBy = 'p.publish_year DESC, p.title ASC';
     switch (sortBy) {
       case 'recent':
@@ -236,7 +235,7 @@ class PaperModel {
         orderBy = 'p.title ASC';
         break;
       case 'citations':
-        orderBy = 'p.publish_year DESC'; // MySQL doesn't have citation_count
+        orderBy = 'p.publish_year DESC';
         break;
       case 'relevance':
         orderBy = 'p.publish_year DESC, p.title ASC';
@@ -244,8 +243,6 @@ class PaperModel {
       default:
         orderBy = 'p.publish_year DESC, p.title ASC';
     }
-
-    // Add sorting and pagination - OPTIMIZED
     const limitInt = parseInt(limit, 10);
     const offsetInt = parseInt(offset, 10);
 
@@ -261,8 +258,6 @@ class PaperModel {
       total
     };
   }
-
-  // Search papers by title - OPTIMIZED
   static async searchByTitle(title, limit = 50) {
     const connection = await getMySQL();
     const limitInt = parseInt(limit, 10);
@@ -287,8 +282,6 @@ class PaperModel {
     const [rows] = await connection.query(sql, [`%${title}%`]);
     return rows;
   }
-
-  // Get papers by year
   static async getByYear(year) {
     const connection = await getMySQL();
     const query = `
@@ -306,8 +299,6 @@ class PaperModel {
     const [rows] = await connection.execute(query, [year]);
     return rows;
   }
-
-  // Get papers by year range
   static async getByYearRange(yearFrom, yearTo) {
     const connection = await getMySQL();
     const query = `
@@ -324,8 +315,6 @@ class PaperModel {
     ]);
     return rows;
   }
-
-  // Get papers by journal
   static async getByJournal(journal) {
     const connection = await getMySQL();
     const query = `
@@ -343,24 +332,15 @@ class PaperModel {
     const [rows] = await connection.execute(query, [`%${journal}%`]);
     return rows;
   }
-
-  // Get filter options (for dropdowns) - OPTIMIZED
   static async getFilterOptions() {
     const connection = await getMySQL();
-
-    // Run all queries in parallel for optimization
     const [years, journals, yearRange] = await Promise.all([
-      // Get available years
       connection.execute(
         'SELECT DISTINCT publish_year FROM papers WHERE publish_year IS NOT NULL ORDER BY publish_year DESC'
       ).then(([rows]) => rows),
-
-      // Get available journals (limited to top 100)
       connection.execute(
         'SELECT DISTINCT j.journal_name FROM journals j WHERE j.journal_name IS NOT NULL ORDER BY j.journal_name ASC LIMIT 100'
       ).then(([rows]) => rows),
-
-      // Get year range
       connection.execute(
         'SELECT MIN(publish_year) as min_year, MAX(publish_year) as max_year FROM papers'
       ).then(([rows]) => rows)
@@ -372,8 +352,6 @@ class PaperModel {
       yearRange: yearRange[0]
     };
   }
-
-  // Get search suggestions - OPTIMIZED
   static async getSuggestions(query, type = 'all') {
     const connection = await getMySQL();
     const suggestions = [];
@@ -404,16 +382,12 @@ class PaperModel {
 
     return suggestions;
   }
-
-  // Get total count
   static async count() {
     const connection = await getMySQL();
     const query = 'SELECT COUNT(*) as count FROM papers';
     const [rows] = await connection.execute(query);
     return rows[0].count;
   }
-
-  // Get years with paper count - OPTIMIZED with GROUP BY
   static async getYearStats() {
     const connection = await getMySQL();
     const query = `
@@ -426,8 +400,6 @@ class PaperModel {
     const [rows] = await connection.execute(query);
     return rows;
   }
-
-  // Get top journals - OPTIMIZED
   static async getTopJournals(limit = 10) {
     const connection = await getMySQL();
     const limitInt = parseInt(limit, 10);
@@ -442,8 +414,6 @@ class PaperModel {
     const [rows] = await connection.query(sql);
     return rows;
   }
-
-  // Get recent papers - OPTIMIZED
   static async getRecent(limit = 20) {
     const connection = await getMySQL();
     const limitInt = parseInt(limit, 10);
@@ -467,8 +437,6 @@ class PaperModel {
     const [rows] = await connection.query(sql);
     return rows;
   }
-
-  // Get papers by multiple criteria - OPTIMIZED
   static async getByMultipleCriteria(criteria) {
     const connection = await getMySQL();
     const { years, journals, authors, limit = 100, offset = 0 } = criteria;
@@ -485,15 +453,8 @@ class PaperModel {
     let conditions = [];
     let params = [];
 
-    // Authors join already added
-    /*
     if (authors && authors.length > 0) {
-      // ...
-    }
-    */
-
-    if (authors && authors.length > 0) {
-      const authorConditions = authors.map(() => 'a.author_name = ?').join(' OR '); // Updated to author_name
+      const authorConditions = authors.map(() => 'a.author_name = ?').join(' OR ');
       conditions.push(`(${authorConditions})`);
       params.push(...authors);
     }
@@ -525,8 +486,6 @@ class PaperModel {
     const [rows] = await connection.query(sql, params);
     return rows;
   }
-
-  // OPTIMIZED: Update paper (only update changed fields)
   static async update(paper_id, updates) {
     const connection = await getMySQL();
     const fields = [];
@@ -552,11 +511,7 @@ class PaperModel {
       fields.push('abstract = ?');
       values.push(updates.abstract);
     }
-
-    // Handle journal update if needed
     if (updates.journal !== undefined) {
-      // This would require journal lookup/creation logic similar to create
-      // For now, skipping complex relation update here to keep valid SQL simple or add later
     }
 
     if (fields.length === 0) {
@@ -568,16 +523,12 @@ class PaperModel {
     const [result] = await connection.execute(query, values);
     return result;
   }
-
-  // OPTIMIZED: Delete paper (cascade handled by FK constraints)
   static async delete(paper_id) {
     const connection = await getMySQL();
     const query = 'DELETE FROM papers WHERE paper_id = ?';
     const [result] = await connection.execute(query, [paper_id]);
     return result;
   }
-
-  // Get average abstract word count
   static async getAvgAbstractWordCount() {
     const connection = await getMySQL();
     const query = 'SELECT AVG(abstract_word_count) as avg_count FROM paper_metrics';
@@ -587,3 +538,4 @@ class PaperModel {
 }
 
 module.exports = PaperModel;
+

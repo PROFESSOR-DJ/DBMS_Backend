@@ -1,10 +1,6 @@
-/**
- * Database Router - Determines optimal database for each operation
- * Based on polyglot persistence principles
- */
-
+// databaseRouter selects backend database operations based on routing rules.
 const DatabaseRouter = {
-  // Use SQL for normalized, relational queries with integrity constraints
+  
   useSQLFor: [
     'user-authentication',
     'user-management',
@@ -14,7 +10,7 @@ const DatabaseRouter = {
     'entity-management'
   ],
 
-  // Use MongoDB for document-based, text search, and analytics
+  
   useMongoDBFor: [
     'full-text-search',
     'paper-metadata-browsing',
@@ -25,7 +21,7 @@ const DatabaseRouter = {
     'aggregation-analytics'
   ],
 
-  // Use PostgreSQL for analytics and reporting (future)
+  
   usePostgreSQLFor: [
     'complex-analytics',
     'trend-analysis',
@@ -33,7 +29,7 @@ const DatabaseRouter = {
     'reporting-dashboards'
   ],
 
-  // Use Neo4j for graph relationships (future)
+  
   useNeo4jFor: [
     'collaboration-networks',
     'citation-graphs',
@@ -41,16 +37,16 @@ const DatabaseRouter = {
     'research-communities'
   ],
 
-  /**
-   * Determine which database to use for a given operation
-   */
+  
+
+
   getDatabaseForOperation(operation) {
     if (this.useSQLFor.includes(operation)) return 'mysql';
     if (this.useMongoDBFor.includes(operation)) return 'mongodb';
     if (this.usePostgreSQLFor.includes(operation)) return 'postgresql';
     if (this.useNeo4jFor.includes(operation)) return 'neo4j';
     
-    // Default to MongoDB for flexibility
+    
     return 'mongodb';
   }
 };

@@ -1,3 +1,4 @@
+// hybridController handles backend requests that combine multiple databases.
 const PaperModel       = require('../models/mysql/paperModel');
 const AuthorModel      = require('../models/mysql/authorModel');
 const PaperAuthorModel = require('../models/mysql/paperAuthorModel');
@@ -6,11 +7,11 @@ const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler
 
 const paperDocument = new PaperDocument();
 
-/**
- * GET /api/hybrid/paper-details/:id
- * Fetches the same paper from both databases and returns a
- * side-by-side comparison.
- */
+
+
+
+
+
 const getPaperDetailsHybrid = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -52,11 +53,11 @@ const getPaperDetailsHybrid = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/hybrid/author-network/:name
- * Returns co-author network using MySQL for relationships and
- * MongoDB for co-author discovery via document analysis.
- */
+
+
+
+
+
 const getAuthorNetwork = asyncHandler(async (req, res) => {
   const { name } = req.params;
 
@@ -115,10 +116,10 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/hybrid/journal-analysis/:journal
- * MySQL for paper list, MongoDB for aggregated analytics.
- */
+
+
+
+
 const getJournalAnalysis = asyncHandler(async (req, res) => {
   const { journal } = req.params;
 
@@ -200,10 +201,10 @@ const getJournalAnalysis = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/hybrid/search-hybrid?q=
- * Runs the same query on both databases and compares results.
- */
+
+
+
+
 const searchHybrid = asyncHandler(async (req, res) => {
   const { q } = req.query;
 
@@ -250,9 +251,9 @@ const searchHybrid = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * POST /api/hybrid/sync/mysql-to-mongo
- */
+
+
+
 const syncMySQLToMongo = asyncHandler(async (req, res) => {
   res.json({
     message: 'Data synchronisation from MySQL to MongoDB',
@@ -267,9 +268,9 @@ const syncMySQLToMongo = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * POST /api/hybrid/sync/mongo-to-mysql
- */
+
+
+
 const syncMongoToMySQL = asyncHandler(async (req, res) => {
   res.json({
     message:   'Data synchronisation from MongoDB to MySQL',
@@ -284,9 +285,9 @@ const syncMongoToMySQL = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/hybrid/sync/status
- */
+
+
+
 const getSyncStatus = asyncHandler(async (req, res) => {
   const [mysqlCountResult, mongoCountResult] = await Promise.allSettled([
     PaperModel.count(),

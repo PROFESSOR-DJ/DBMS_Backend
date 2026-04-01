@@ -1,3 +1,4 @@
+// fixUsersTable repairs the backend users table structure or contents.
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
@@ -15,7 +16,7 @@ const fixUsersTable = async () => {
       database: process.env.MYSQL_DATABASE || 'research_sql'
     });
 
-    // Check if last_login column exists
+    
     const [columns] = await connection.query(`
       SELECT COLUMN_NAME 
       FROM INFORMATION_SCHEMA.COLUMNS 
@@ -35,7 +36,7 @@ const fixUsersTable = async () => {
       console.log('✅ last_login column already exists\n');
     }
 
-    // Show current table structure
+    
     const [structure] = await connection.query('DESCRIBE users');
     console.log('Current users table structure:');
     console.table(structure);

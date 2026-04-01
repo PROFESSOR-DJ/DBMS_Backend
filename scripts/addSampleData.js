@@ -1,3 +1,4 @@
+// addSampleData inserts backend sample research records for testing.
 const { connectMySQL, connectMongoDB, getMySQL, getMongoDB } = require('../config/database');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
@@ -77,7 +78,7 @@ const addToMySQL = async () => {
     
     console.log(`   ✓ Added: ${added}, Skipped: ${skipped}`);
     
-    // Add test user if not exists
+    
     const [existingUser] = await connection.execute(
       'SELECT user_id FROM users WHERE email = ?',
       ['test@example.com']

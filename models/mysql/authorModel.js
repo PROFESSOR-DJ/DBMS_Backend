@@ -1,8 +1,9 @@
+// authorModel manages backend MySQL author records.
 const { getMySQL } = require('../../config/database');
 
 class AuthorModel {
-  // Create author
-  // Create author with optional paper link
+  
+  
   static async create(author) {
     const { author_name, paper_id } = author;
     const pool = getMySQL();
@@ -12,12 +13,12 @@ class AuthorModel {
       if (paper_id) {
         await connection.beginTransaction();
         try {
-          // 1. Create Author
+          
           const [result] = await connection.execute('INSERT INTO authors (author_name) VALUES (?)', [author_name]);
           const author_id = result.insertId;
 
-          // 2. Link object to Paper
-          // Get next author_order
+          
+          
           const [rows] = await connection.execute('SELECT MAX(author_order) as max_order FROM paper_authors WHERE paper_id = ?', [paper_id]);
           const nextOrder = (rows[0].max_order || 0) + 1;
 
@@ -40,7 +41,7 @@ class AuthorModel {
     }
   }
 
-  // Update author
+  
   static async update(author_id, updates) {
     const { author_name } = updates;
     const query = 'UPDATE authors SET author_name = ? WHERE author_id = ?';
@@ -48,14 +49,14 @@ class AuthorModel {
     return result;
   }
 
-  // Delete author
+  
   static async delete(author_id) {
     const query = 'DELETE FROM authors WHERE author_id = ?';
     const [result] = await (await getMySQL()).execute(query, [author_id]);
     return result;
   }
 
-  // Get all authors
+  
   static async findAll(limit = 100, offset = 0) {
     const limitInt = parseInt(limit, 10);
     const offsetInt = parseInt(offset, 10);
@@ -73,21 +74,21 @@ class AuthorModel {
     return rows;
   }
 
-  // Get author by ID
+  
   static async findById(author_id) {
     const query = 'SELECT * FROM authors WHERE author_id = ?';
     const [rows] = await (await getMySQL()).execute(query, [author_id]);
     return rows[0];
   }
 
-  // Get author by name
+  
   static async findByName(author_name) {
     const query = 'SELECT * FROM authors WHERE author_name = ?';
     const [rows] = await (await getMySQL()).execute(query, [author_name]);
     return rows[0];
   }
 
-  // Search authors by name
+  
   static async searchByName(author_name, limit = 50) {
     const limitInt = parseInt(limit, 10);
 
@@ -108,7 +109,7 @@ class AuthorModel {
     return rows;
   }
 
-  // Get papers of an author
+  
   static async getPapersByAuthor(author_name) {
     const sql = `
         SELECT p.title, p.paper_id, p.publish_year
@@ -122,7 +123,7 @@ class AuthorModel {
     return rows;
   }
 
-  // Get top authors by paper count
+  
   static async getTopAuthors(limit = 10) {
     const limitInt = parseInt(limit, 10);
 
@@ -142,7 +143,7 @@ class AuthorModel {
     return rows;
   }
 
-  // Get total count
+  
   static async count() {
     const query = 'SELECT COUNT(*) as count FROM authors';
     const [rows] = await (await getMySQL()).execute(query);

@@ -1,12 +1,13 @@
+// authController handles backend login, registration, and account actions.
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
 const UserModel = require('../models/mysql/userModel');
 const { validationResult } = require('express-validator');
 const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler');
 
-/**
- * POST /api/auth/register
- */
+
+
+
 const register = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -15,13 +16,13 @@ const register = asyncHandler(async (req, res) => {
 
   const { name, email, password } = req.body;
 
-  // Check duplicate email
+  
   const existingUser = await UserModel.findByEmail(email.toLowerCase());
   if (existingUser) {
     throw new AppError('An account with this email already exists.', 409, 'DUPLICATE_ENTRY');
   }
 
-  // Hash password
+  
   const salt          = await bcrypt.genSalt(10);
   const password_hash = await bcrypt.hash(password, salt);
 
@@ -35,7 +36,7 @@ const register = asyncHandler(async (req, res) => {
     });
   } catch (err) {
     const appErr = classifyError(err);
-    // Race condition: duplicate email inserted between our check and insert
+    
     if (appErr.code === 'DUPLICATE_ENTRY') {
       throw new AppError('An account with this email already exists.', 409, 'DUPLICATE_ENTRY');
     }
@@ -57,9 +58,9 @@ const register = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * POST /api/auth/login
- */
+
+
+
 const login = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -70,8 +71,8 @@ const login = asyncHandler(async (req, res) => {
 
   const user = await UserModel.findByEmail(email.toLowerCase());
   if (!user) {
-    // Use the same message for missing user and wrong password to prevent
-    // user-enumeration attacks.
+    
+    
     throw new AppError('Invalid email or password.', 401, 'INVALID_CREDENTIALS');
   }
 
@@ -97,9 +98,9 @@ const login = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * POST /api/auth/forgot-password
- */
+
+
+
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
 
@@ -107,8 +108,8 @@ const forgotPassword = asyncHandler(async (req, res) => {
     throw new AppError('Email is required.', 400, 'MISSING_FIELDS');
   }
 
-  // We intentionally do NOT reveal whether the email exists (prevents enumeration).
-  await UserModel.findByEmail(email.toLowerCase());  // result intentionally ignored
+  
+  await UserModel.findByEmail(email.toLowerCase());  
 
   res.json({
     message: 'If an account exists with this email, you will receive password reset instructions.',
@@ -116,9 +117,9 @@ const forgotPassword = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * Middleware: authenticate JWT
- */
+
+
+
 const authenticate = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token      = authHeader && authHeader.split(' ')[1];
@@ -138,9 +139,9 @@ const authenticate = (req, res, next) => {
   });
 };
 
-/**
- * GET /api/auth/profile
- */
+
+
+
 const getProfile = asyncHandler(async (req, res) => {
   const user = await UserModel.findById(req.user.user_id);
   if (!user) {
@@ -149,9 +150,9 @@ const getProfile = asyncHandler(async (req, res) => {
   res.json(user);
 });
 
-/**
- * PUT /api/auth/profile
- */
+
+
+
 const updateProfile = asyncHandler(async (req, res) => {
   const { name, email } = req.body;
 

@@ -1,3 +1,4 @@
+// initDatabases creates and prepares the backend database structures.
 const initMongoDB = async () => {
   let client;
   try {
@@ -7,23 +8,23 @@ const initMongoDB = async () => {
     await client.connect();
     const db = client.db(process.env.MONGODB_DB);
 
-    // Check if collection exists, drop if it does to avoid index conflicts
+    
     const collections = await db.listCollections({ name: 'papers' }).toArray();
     if (collections.length > 0) {
       console.log('⚠️ Dropping existing papers collection to avoid index conflicts...');
       await db.collection('papers').drop();
     }
 
-    // Create collection
+    
     await db.createCollection('papers');
     
-    // Get collection reference
+    
     const papersCollection = db.collection('papers');
     
-    // Create indexes according to your schema
+    
     console.log('Creating text index for search...');
     try {
-      // Drop existing text index if it exists with different name
+      
       const existingIndexes = await papersCollection.indexes();
       for (const index of existingIndexes) {
         if (index.name === 'text_search' || index.key && index.key._fts === 'text') {
@@ -32,7 +33,7 @@ const initMongoDB = async () => {
         }
       }
       
-      // Create text index with specific name
+      
       await papersCollection.createIndex(
         { title: 'text', abstract: 'text' },
         { name: 'text_search' }
@@ -42,7 +43,7 @@ const initMongoDB = async () => {
       console.log('⚠️ Could not create text index:', indexError.message);
     }
 
-    // Create other indexes based on your schema
+    
     console.log('Creating field indexes...');
     await papersCollection.createIndex({ journal: 1 }, { name: 'idx_journal' });
     await papersCollection.createIndex({ year: 1 }, { name: 'idx_year' });
@@ -57,7 +58,7 @@ const initMongoDB = async () => {
     
   } catch (error) {
     console.error('❌ Error initializing MongoDB:', error.message);
-    // Don't throw error - continue with MySQL
+    
   } finally {
     if (client) await client.close();
   }

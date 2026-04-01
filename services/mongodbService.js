@@ -1,3 +1,4 @@
+// mongodbService handles backend MongoDB reads, writes, and connection logic.
 const { getMongoDB } = require('../config/database');
 
 class MongoDBService {
