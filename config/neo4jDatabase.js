@@ -7,7 +7,7 @@ const connectNeo4j = async () => {
   try {
     const uri      = process.env.NEO4J_URI      || 'bolt://localhost:7687';
     const user     = process.env.NEO4J_USER     || 'neo4j';
-    const password = process.env.NEO4J_PASSWORD || 'your_password';
+    const password = process.env.NEO4J_PASSWORD || 'Gitcode123$';
 
     driver = neo4j.driver(uri, neo4j.auth.basic(user, password));
 
@@ -30,7 +30,7 @@ const connectNeo4j = async () => {
 
 const getNeo4jSession = () => {
   if (!driver) throw new Error('Neo4j driver not initialised. Call connectNeo4j() first.');
-  return driver.session({ database: process.env.NEO4J_DATABASE || 'neo4j' });
+  return driver.session({ database: process.env.NEO4J_DATABASE || 'research-graph' });
 };
 
 const isNeo4jConnected = () => !!driver;

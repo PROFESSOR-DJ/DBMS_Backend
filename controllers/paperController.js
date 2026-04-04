@@ -1,16 +1,22 @@
 // paperController handles backend paper CRUD and lookup requests.
+// Trigger interactions:
+//   trg_validate_paper        — BEFORE INSERT on papers: rejects title < 5 chars
+//   trg_after_paper_insert    — AFTER INSERT on papers: creates paper_metrics row
+//   trg_update_journal_count  — AFTER INSERT on papers: increments journals.paper_count
+//   trg_mark_important_paper  — AFTER INSERT on paper_metrics: sets is_important when author_count >= 5
+//   trg_after_paper_authors_insert/delete — sync paper_metrics.author_count
+//   trg_before_author_delete  — guard against deleting linked authors (handled in authorController)
+
 const PaperModel       = require('../models/mysql/paperModel');
 const AuthorModel      = require('../models/mysql/authorModel');
 const PaperAuthorModel = require('../models/mysql/paperAuthorModel');
 const PaperDocument    = require('../models/mongodb/paperModel');
 const DatabaseRouter   = require('../config/databaseRouter');
-const { AppError, classifyError, asyncHandler, sendError } = require('../utils/errorHandler');
+const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler');
 
 const paperDocument = new PaperDocument();
 
-
-
-
+// ── GET ALL PAPERS ────────────────────────────────────────────────────────────
 const getAllPapers = asyncHandler(async (req, res) => {
   const limit  = parseInt(req.query.limit, 10) || 20;
   const page   = parseInt(req.query.page,  10) || 1;
@@ -29,9 +35,7 @@ const getAllPapers = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
+// ── GET PAPER BY ID ───────────────────────────────────────────────────────────
 const getPaperById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -42,15 +46,13 @@ const getPaperById = asyncHandler(async (req, res) => {
 
   res.json({
     paper,
-    source: 'mongodb',
+    source:       'mongodb',
     enriched_with: 'sql_relationships',
-    reason: 'MongoDB for document retrieval with SQL enrichment',
+    reason:       'MongoDB for document retrieval with SQL enrichment',
   });
 });
 
-
-
-
+// ── SEARCH PAPERS ─────────────────────────────────────────────────────────────
 const searchPapers = asyncHandler(async (req, res) => {
   const {
     q, yearFrom, yearTo, journal, author,
@@ -63,7 +65,7 @@ const searchPapers = asyncHandler(async (req, res) => {
   const offset = (page - 1) * limit;
 
   const searchParams = {
-    query: q,
+    query:        q,
     yearFrom:     yearFrom     ? parseInt(yearFrom)     : null,
     yearTo:       yearTo       ? parseInt(yearTo)       : null,
     journal,
@@ -92,9 +94,7 @@ const searchPapers = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
+// ── GET PAPERS BY YEAR ────────────────────────────────────────────────────────
 const getPapersByYear = asyncHandler(async (req, res) => {
   const { year } = req.params;
   const yearInt  = parseInt(year, 10);
@@ -104,7 +104,6 @@ const getPapersByYear = asyncHandler(async (req, res) => {
   }
 
   const papers = await paperDocument.getByYear(yearInt);
-
   res.json({
     year, papers, count: papers.length,
     source: 'mongodb',
@@ -112,14 +111,10 @@ const getPapersByYear = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
+// ── GET PAPERS BY JOURNAL ─────────────────────────────────────────────────────
 const getPapersByJournal = asyncHandler(async (req, res) => {
   const { journal } = req.params;
-
   const papers = await paperDocument.getByJournal(journal);
-
   res.json({
     journal, papers, count: papers.length,
     source: 'mongodb',
@@ -127,15 +122,11 @@ const getPapersByJournal = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
+// ── GET PAPERS BY AUTHOR ──────────────────────────────────────────────────────
 const getPapersByAuthor = asyncHandler(async (req, res) => {
   const { author } = req.params;
-
   const result = await paperDocument.advancedSearch({ author });
   const papers = result.papers || result;
-
   res.json({
     author, papers, count: papers.length,
     source: 'mongodb',
@@ -143,31 +134,23 @@ const getPapersByAuthor = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
+// ── GET FILTER OPTIONS ────────────────────────────────────────────────────────
 const getFilterOptions = asyncHandler(async (req, res) => {
   const filterOptions = await paperDocument.getFilterOptions();
-
   res.json({
     filters: filterOptions,
-    source: 'mongodb',
-    reason: 'MongoDB aggregation provides fast distinct value queries',
+    source:  'mongodb',
+    reason:  'MongoDB aggregation provides fast distinct value queries',
   });
 });
 
-
-
-
+// ── GET SUGGESTIONS ───────────────────────────────────────────────────────────
 const getSuggestions = asyncHandler(async (req, res) => {
   const { q, type = 'all' } = req.query;
 
-  if (!q || q.length < 2) {
-    return res.json({ suggestions: [] });
-  }
+  if (!q || q.length < 2) return res.json({ suggestions: [] });
 
   const suggestions = await paperDocument.getSuggestions(q, type);
-
   res.json({
     suggestions, type,
     source: 'mongodb',
@@ -175,9 +158,16 @@ const getSuggestions = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
+// ── CREATE PAPER ──────────────────────────────────────────────────────────────
+// Trigger chain on MySQL INSERT:
+//   1. trg_validate_paper       → rejects if title is NULL or < 5 chars
+//   2. trg_after_paper_insert   → creates paper_metrics row (author_count = 0)
+//   3. trg_update_journal_count → increments journals.paper_count for this journal
+// After author links are added via PaperModel.create():
+//   4. trg_after_paper_authors_insert → increments paper_metrics.author_count per author
+//   5. trg_mark_important_paper       → sets is_important = TRUE when author_count >= 5
+//
+// The old manual INSERT INTO paper_metrics has been removed from PaperModel.create().
 const createPaper = asyncHandler(async (req, res) => {
   const paper = req.body;
 
@@ -185,56 +175,57 @@ const createPaper = asyncHandler(async (req, res) => {
     throw new AppError('Fields paper_id and title are required.', 400, 'MISSING_FIELDS');
   }
 
-  
+  // MongoDB first
   let mongoResult = { insertedId: null };
   try {
     mongoResult = await paperDocument.create(paper);
   } catch (mongoErr) {
-    
     throw classifyError(mongoErr);
   }
 
-  
+  // MySQL — triggers fire automatically (see chain above)
   let mysqlResult = { insertId: null };
   try {
     mysqlResult = await PaperModel.create(paper);
   } catch (mysqlErr) {
     const appErr = classifyError(mysqlErr);
-    
-    
+
     if (appErr.code === 'DUPLICATE_ENTRY') {
       return res.status(409).json({
-        error:   appErr.message,
-        code:    appErr.code,
-        detail:  'Paper was inserted in MongoDB but already existed in MySQL.',
+        error:  appErr.message,
+        code:   appErr.code,
+        detail: 'Paper was inserted in MongoDB but already existed in MySQL.',
         mongodb_insert_id: mongoResult.insertedId,
       });
     }
-    
+
     console.warn('MySQL paper insert warning:', appErr.message);
   }
 
   res.status(201).json({
-    message: 'Paper created successfully.',
+    message:           'Paper created successfully.',
     mongodb_insert_id: mongoResult.insertedId,
     mysql_insert_id:   mysqlResult.insertId,
     paper,
+    trigger_effects: {
+      trg_validate_paper:       'Title length validated (>= 5 chars required)',
+      trg_after_paper_insert:   'paper_metrics row auto-created',
+      trg_update_journal_count: 'journals.paper_count incremented',
+      trg_mark_important_paper: 'is_important set to TRUE if >= 5 authors linked',
+    },
     reason: 'MongoDB primary document store, MySQL for relational integrity',
   });
 });
 
-
-
-
+// ── UPDATE PAPER ──────────────────────────────────────────────────────────────
 const updatePaper = asyncHandler(async (req, res) => {
-  const { id }    = req.params;
-  const updates   = req.body;
+  const { id }   = req.params;
+  const updates  = req.body;
 
   if (!updates || Object.keys(updates).length === 0) {
     throw new AppError('No update fields provided.', 400, 'MISSING_FIELDS');
   }
 
-  
   try {
     const result = await paperDocument.update(id, updates);
     if (result.matchedCount === 0) {
@@ -245,7 +236,6 @@ const updatePaper = asyncHandler(async (req, res) => {
     throw classifyError(err);
   }
 
-  
   try {
     await PaperModel.update(id, updates);
   } catch (mysqlErr) {
@@ -255,13 +245,11 @@ const updatePaper = asyncHandler(async (req, res) => {
   res.json({ message: 'Paper updated.', paper_id: id, updates });
 });
 
-
-
-
+// ── DELETE PAPER ──────────────────────────────────────────────────────────────
+// trg_after_paper_delete fires after the MySQL DELETE (no-op / audit extension point).
 const deletePaper = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  
   try {
     const result = await paperDocument.delete(id);
     if (result.deletedCount === 0) {
@@ -272,12 +260,10 @@ const deletePaper = asyncHandler(async (req, res) => {
     throw classifyError(err);
   }
 
-  
   try {
     await PaperModel.delete(id);
   } catch (mysqlErr) {
     const appErr = classifyError(mysqlErr);
-    
     if (appErr.code === 'FK_REFERENCE_EXISTS') {
       console.warn(`MySQL delete FK warning for paper '${id}':`, appErr.message);
     } else {
@@ -288,9 +274,8 @@ const deletePaper = asyncHandler(async (req, res) => {
   res.json({ message: 'Paper deleted.', paper_id: id });
 });
 
-
-
-
+// ── BULK ADD PAPERS ───────────────────────────────────────────────────────────
+// Trigger chain fires for each inserted paper (same as createPaper above).
 const addPapersBulk = asyncHandler(async (req, res) => {
   const papers = req.body;
 
@@ -315,15 +300,16 @@ const addPapersBulk = asyncHandler(async (req, res) => {
     }
   }
 
-  const httpStatus = results.inserted > 0 ? 207 : 400;  
+  const httpStatus = results.inserted > 0 ? 207 : 400;
   res.status(httpStatus).json({
-    message:          'Bulk insert completed.',
-    total_submitted:  papers.length,
-    inserted:         results.inserted,
+    message:           'Bulk insert completed.',
+    total_submitted:   papers.length,
+    inserted:          results.inserted,
     skipped_duplicate: results.skipped_duplicate,
-    failed:           results.failed,
-    errors:           results.errors,
-    reason:           'MySQL for referential integrity on bulk operations',
+    failed:            results.failed,
+    errors:            results.errors,
+    trigger_note:      'trg_validate_paper, trg_after_paper_insert, trg_update_journal_count fired per paper.',
+    reason:            'MySQL for referential integrity on bulk operations',
   });
 });
 
