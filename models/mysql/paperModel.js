@@ -5,19 +5,16 @@
 //   trg_after_paper_insert    — AFTER INSERT on papers: inserts paper_metrics row
 //   trg_mark_important_paper  — AFTER INSERT on paper_metrics: sets is_important=TRUE when author_count >= 5
 //   trg_after_paper_authors_insert/delete — keep paper_metrics.author_count in sync
+//
+// NOTE: trg_update_journal_count only fires on INSERT.  On DELETE we must
+//       manually decrement journals.paper_count so the count stays accurate
+//       and the Journals page / journal-popularity endpoint are consistent.
 
 const { getMySQL } = require('../../config/database');
 
 class PaperModel {
 
   // ── CREATE ────────────────────────────────────────────────────────────────
-  // Notes on triggers that fire automatically during create:
-  //  1. trg_validate_paper       — rejects the INSERT if title is NULL or < 5 chars.
-  //  2. trg_after_paper_insert   — creates the paper_metrics row (author_count=0).
-  //  3. trg_update_journal_count — increments journals.paper_count for this journal.
-  //  4. trg_mark_important_paper — fires after paper_metrics insert; sets is_important
-  //                                when author_count >= 5 (won't apply at creation time
-  //                                since author links are added after the paper row).
   static async create(paper) {
     const pool = getMySQL();
     const connection = await pool.getConnection();
@@ -72,13 +69,7 @@ class PaperModel {
         is_covid19 || false, has_full_text || false,
       ]);
 
-      // paper_metrics row is created by trg_after_paper_insert with author_count=0.
-      // We do NOT insert it manually here — that would duplicate the trigger's work.
-      // The explicit INSERT in the old code has been removed.
-
-      // Insert authors — each INSERT into paper_authors fires
-      // trg_after_paper_authors_insert, which increments paper_metrics.author_count.
-      // When author_count reaches 5, trg_mark_important_paper sets is_important=TRUE.
+      // Insert authors
       if (normalisedAuthors.length > 0) {
         for (let i = 0; i < normalisedAuthors.length; i++) {
           const authorName = normalisedAuthors[i];
@@ -104,8 +95,6 @@ class PaperModel {
             'INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES (?, ?, ?)',
             [paper_id, author_id, i + 1]
           );
-          // trg_after_paper_authors_insert fires here → updates paper_metrics.author_count
-          // When count hits 5, trg_mark_important_paper sets papers.is_important = TRUE
         }
       }
 
@@ -439,8 +428,7 @@ class PaperModel {
     return suggestions;
   }
 
-  // Returns trigger-backed paper flags for a batch of paper ids so Mongo paper
-  // documents can be enriched without switching the whole listing flow to SQL.
+  // Returns trigger-backed paper flags for a batch of paper ids
   static async getFlagsByPaperIds(paperIds = []) {
     const connection = await getMySQL();
     const normalizedIds = [...new Set(
@@ -499,8 +487,7 @@ class PaperModel {
     return rows;
   }
 
-  // ── TOP JOURNALS (MySQL — uses denormalised paper_count maintained by trigger) ──
-  // Reads directly from journals.paper_count instead of GROUP BY — fast O(1) per row.
+  // ── TOP JOURNALS ──────────────────────────────────────────────────────────
   static async getTopJournals(limit = 10) {
     const connection = await getMySQL();
     const limitInt   = parseInt(limit, 10);
@@ -511,7 +498,6 @@ class PaperModel {
       ORDER BY paper_count DESC
       LIMIT ${limitInt}
     `;
-    // paper_count is kept current by trigger trg_update_journal_count
     const [rows] = await connection.query(sql);
     return rows;
   }
@@ -603,11 +589,109 @@ class PaperModel {
   }
 
   // ── DELETE ────────────────────────────────────────────────────────────────
-  // trg_after_paper_delete fires after this DELETE (audit log extension point).
+  // Full cascade cleanup without any schema changes.  The logic mirrors what
+  // a set of AFTER DELETE triggers would do, implemented here in the model so
+  // the existing trigger definitions are untouched.
+  //
+  // Steps (all inside one transaction):
+  //   1. Snapshot the paper's journal_id and the ids of every linked author
+  //      BEFORE the paper row is deleted (the CASCADE will remove paper_authors
+  //      and paper_metrics automatically when the paper is deleted).
+  //   2. Delete the paper.
+  //   3. For the journal: recompute its real paper count.
+  //        - If count is now 0  → delete the journal row entirely so it no
+  //          longer shows up in the Journals page with a "0 papers" entry.
+  //        - If count  > 0 → write the accurate count back to paper_count.
+  //   4. For each author that was linked to this paper: count how many OTHER
+  //      papers they still have.
+  //        - If 0 remaining papers → delete the author row so they no longer
+  //          appear in the Authors page with "0 papers".
+  //        - If > 0 remaining → leave them untouched.
+  //
+  // Using a recompute (COUNT(*)) rather than a simple -1 decrement makes the
+  // columns self-healing: any stale count from a previous bulk-import or
+  // accidental duplicate create is also corrected at delete time.
   static async delete(paper_id) {
-    const connection = await getMySQL();
-    const [result]   = await connection.execute('DELETE FROM papers WHERE paper_id = ?', [paper_id]);
-    return result;
+    const pool       = getMySQL();
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // ── Step 1: snapshot journal + authors before CASCADE removes them ──
+      const [[paperRow]] = await connection.execute(
+        'SELECT journal_id FROM papers WHERE paper_id = ?',
+        [paper_id]
+      );
+      const journal_id = paperRow ? paperRow.journal_id : null;
+
+      // Collect every author_id linked to this paper so we can check them
+      // after the delete (paper_authors CASCADE will be gone by then).
+      const [linkedAuthors] = await connection.execute(
+        'SELECT author_id FROM paper_authors WHERE paper_id = ?',
+        [paper_id]
+      );
+      const authorIds = linkedAuthors.map(r => r.author_id);
+
+      // ── Step 2: delete the paper (CASCADE cleans paper_authors + paper_metrics) ──
+      const [result] = await connection.execute(
+        'DELETE FROM papers WHERE paper_id = ?',
+        [paper_id]
+      );
+
+      // ── Step 3: journal cleanup ──────────────────────────────────────────
+      if (journal_id) {
+        const [[countRow]] = await connection.execute(
+          'SELECT COUNT(*) AS cnt FROM papers WHERE journal_id = ?',
+          [journal_id]
+        );
+        if (countRow.cnt === 0) {
+          // No papers left in this journal — remove the journal row entirely
+          // so it doesn't linger at "0 papers" in the Journals page.
+          await connection.execute(
+            'DELETE FROM journals WHERE journal_id = ?',
+            [journal_id]
+          );
+        } else {
+          // Write back the accurate count (self-heals any previous stale value).
+          await connection.execute(
+            'UPDATE journals SET paper_count = ? WHERE journal_id = ?',
+            [countRow.cnt, journal_id]
+          );
+        }
+      }
+
+      // ── Step 4: author cleanup ───────────────────────────────────────────
+      // For each author that was linked to the deleted paper, check whether
+      // they have any remaining papers.  If not, delete them.
+      // trg_before_author_delete guards against deleting authors that still
+      // have linked papers, so we only attempt deletion when the count is 0.
+      if (authorIds.length > 0) {
+        for (const author_id of authorIds) {
+          const [[remainingRow]] = await connection.execute(
+            'SELECT COUNT(*) AS cnt FROM paper_authors WHERE author_id = ?',
+            [author_id]
+          );
+          if (remainingRow.cnt === 0) {
+            // Author has no papers left — safe to delete.
+            // The trigger trg_before_author_delete will not block this because
+            // the count is already 0 (paper_authors CASCADE deleted the link).
+            await connection.execute(
+              'DELETE FROM authors WHERE author_id = ?',
+              [author_id]
+            );
+          }
+          // If cnt > 0 the author still has other papers — leave them alone.
+        }
+      }
+
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   // ── MISC ──────────────────────────────────────────────────────────────────

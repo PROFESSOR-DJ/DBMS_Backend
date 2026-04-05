@@ -6,6 +6,15 @@
 //   trg_mark_important_paper  — AFTER INSERT on paper_metrics: sets is_important when author_count >= 5
 //   trg_after_paper_authors_insert/delete — sync paper_metrics.author_count
 //   trg_before_author_delete  — guard against deleting linked authors (handled in authorController)
+//
+// CONSISTENCY NOTE:
+//   trg_update_journal_count fires only on INSERT.  The paperModel.delete() method
+//   therefore recomputes and writes back journals.paper_count after every deletion
+//   so the Journals page and journal-popularity endpoint stay accurate.
+//
+//   Neo4j WROTE/PUBLISHED_IN relationship counts use DISTINCT in Cypher queries
+//   (see neo4jController.js) so stale duplicate edges from past bulk-imports do
+//   not inflate author or journal paper counts.
 
 const PaperModel       = require('../models/mysql/paperModel');
 const AuthorModel      = require('../models/mysql/authorModel');
@@ -302,16 +311,6 @@ const getSuggestions = asyncHandler(async (req, res) => {
 });
 
 // ── CREATE PAPER ──────────────────────────────────────────────────────────────
-// Trigger chain on MySQL INSERT:
-//   1. trg_validate_paper       → rejects if title is NULL or < 5 chars
-//   2. trg_after_paper_insert   → creates paper_metrics row (author_count = 0)
-//   3. trg_update_journal_count → increments journals.paper_count for this journal
-// After author links are added via PaperModel.create():
-//   4. trg_after_paper_authors_insert → increments paper_metrics.author_count per author
-//   5. trg_mark_important_paper       → sets is_important = TRUE when author_count >= 5
-//
-// The create flow now requires MySQL, MongoDB, and Neo4j to stay in sync.
-// If a later step fails, earlier writes are compensated to avoid partial records.
 const createPaper = asyncHandler(async (req, res) => {
   const paper = normalisePaperPayload(req.body);
 
@@ -358,7 +357,6 @@ const createPaper = asyncHandler(async (req, res) => {
       trg_mark_important_paper: 'is_important set to TRUE if >= 5 authors linked',
     },
     graph_sync: 'Neo4j author, journal, paper, year, and source nodes updated',
-    reason: 'Create now succeeds only when MongoDB, MySQL, and Neo4j stay in sync',
   });
 });
 
@@ -391,10 +389,13 @@ const updatePaper = asyncHandler(async (req, res) => {
 });
 
 // ── DELETE PAPER ──────────────────────────────────────────────────────────────
-// trg_after_paper_delete fires after the MySQL DELETE (no-op / audit extension point).
+// Deletion order: MongoDB first, then MySQL (which recomputes journals.paper_count),
+// then Neo4j cleanup.  Each step is attempted even if a previous one warns, so all
+// three stores are kept in sync after a delete.
 const deletePaper = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
+  // Step 1: MongoDB
   try {
     const result = await paperDocument.delete(id);
     if (result.deletedCount === 0) {
@@ -405,6 +406,7 @@ const deletePaper = asyncHandler(async (req, res) => {
     throw classifyError(err);
   }
 
+  // Step 2: MySQL  — paperModel.delete() also recomputes journals.paper_count
   try {
     await PaperModel.delete(id);
   } catch (mysqlErr) {
@@ -416,6 +418,7 @@ const deletePaper = asyncHandler(async (req, res) => {
     }
   }
 
+  // Step 3: Neo4j — removes Paper node and orphaned Author/Journal/Year/Source nodes
   try {
     await removePaperFromGraph(id);
   } catch (neo4jErr) {
@@ -426,7 +429,6 @@ const deletePaper = asyncHandler(async (req, res) => {
 });
 
 // ── BULK ADD PAPERS ───────────────────────────────────────────────────────────
-// Trigger chain fires for each inserted paper (same as createPaper above).
 const addPapersBulk = asyncHandler(async (req, res) => {
   const papers = req.body;
 
@@ -460,7 +462,6 @@ const addPapersBulk = asyncHandler(async (req, res) => {
     failed:            results.failed,
     errors:            results.errors,
     trigger_note:      'trg_validate_paper, trg_after_paper_insert, trg_update_journal_count fired per paper.',
-    reason:            'MySQL for referential integrity on bulk operations',
   });
 });
 

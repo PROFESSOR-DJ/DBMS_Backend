@@ -1,14 +1,13 @@
 // neo4jController handles backend graph analytics and network requests.
+// All paper-count Cypher queries use COUNT(DISTINCT p) so that stale duplicate
+// WROTE/PUBLISHED_IN relationships left behind by previous bulk imports do not
+// inflate author or journal paper counts shown in the Network page.
 const { runQuery, isNeo4jConnected } = require('../config/neo4jDatabase');
 const { asyncHandler, AppError }     = require('../utils/errorHandler');
-
-
-
 
 const toNum = (val) => {
   if (val === null || val === undefined) return 0;
   if (typeof val === 'number') return val;
-  
   if (typeof val.toNumber === 'function') return val.toNumber();
   return Number(val);
 };
@@ -19,10 +18,7 @@ const guardNeo4j = () => {
   }
 };
 
-
-
-
-
+// ── GRAPH STATS ───────────────────────────────────────────────────────────────
 const getGraphStats = asyncHandler(async (req, res) => {
   guardNeo4j();
 
@@ -63,22 +59,23 @@ const getGraphStats = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
-
+// ── AUTHOR NETWORK ────────────────────────────────────────────────────────────
+// Uses DISTINCT on Paper nodes so duplicate WROTE edges (from past bulk imports)
+// do not count the same paper multiple times for co-author or paper tallies.
 const getAuthorNetwork = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { name } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
 
-  
+  // COUNT(DISTINCT p) ensures a paper shared via duplicate relationships is
+  // counted only once per co-author pair.
   const records = await runQuery(
     `
     MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)<-[:WROTE]-(coAuthor:Author)
     WHERE coAuthor.name <> $name
-    WITH coAuthor.name AS coAuthorName, count(p) AS sharedPapers,
-         collect(p.title)[0..3] AS samplePapers
+    WITH coAuthor.name AS coAuthorName,
+         COUNT(DISTINCT p) AS sharedPapers,
+         collect(DISTINCT p.title)[0..3] AS samplePapers
     ORDER BY sharedPapers DESC
     LIMIT $limit
     RETURN coAuthorName, sharedPapers, samplePapers
@@ -92,10 +89,11 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
     samplePapers: r.get('samplePapers'),
   }));
 
-  
+  // COUNT(DISTINCT p) for the author's own paper list
   const paperRecords = await runQuery(
     `
     MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)
+    WITH DISTINCT p
     OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(j:Journal)
     OPTIONAL MATCH (p)-[:PUBLISHED_YEAR]->(y:Year)
     RETURN p.paper_id AS id, p.title AS title, j.name AS journal,
@@ -124,10 +122,8 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
   });
 });
 
-
-
-
-
+// ── TOP AUTHORS ───────────────────────────────────────────────────────────────
+// COUNT(DISTINCT p) prevents duplicate WROTE edges from inflating author paper counts.
 const getTopAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
@@ -135,7 +131,7 @@ const getTopAuthors = asyncHandler(async (req, res) => {
   const records = await runQuery(
     `
     MATCH (a:Author)-[:WROTE]->(p:Paper)
-    RETURN a.name AS author, count(p) AS paperCount
+    RETURN a.name AS author, COUNT(DISTINCT p) AS paperCount
     ORDER BY paperCount DESC
     LIMIT $limit
     `,
@@ -150,10 +146,8 @@ const getTopAuthors = asyncHandler(async (req, res) => {
   res.json({ authors, source: 'neo4j' });
 });
 
-
-
-
-
+// ── TOP JOURNALS ──────────────────────────────────────────────────────────────
+// COUNT(DISTINCT p) prevents duplicate PUBLISHED_IN edges from inflating journal counts.
 const getTopJournals = asyncHandler(async (req, res) => {
   guardNeo4j();
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
@@ -161,7 +155,7 @@ const getTopJournals = asyncHandler(async (req, res) => {
   const records = await runQuery(
     `
     MATCH (p:Paper)-[:PUBLISHED_IN]->(j:Journal)
-    RETURN j.name AS journal, count(p) AS paperCount
+    RETURN j.name AS journal, COUNT(DISTINCT p) AS paperCount
     ORDER BY paperCount DESC
     LIMIT $limit
     `,
@@ -176,16 +170,14 @@ const getTopJournals = asyncHandler(async (req, res) => {
   res.json({ journals, source: 'neo4j' });
 });
 
-
-
-
-
+// ── PAPERS BY YEAR ────────────────────────────────────────────────────────────
+// COUNT(DISTINCT p) prevents duplicate PUBLISHED_YEAR edges from double-counting.
 const getPapersByYear = asyncHandler(async (req, res) => {
   guardNeo4j();
 
   const records = await runQuery(`
     MATCH (p:Paper)-[:PUBLISHED_YEAR]->(y:Year)
-    RETURN y.value AS year, count(p) AS paperCount
+    RETURN y.value AS year, COUNT(DISTINCT p) AS paperCount
     ORDER BY year ASC
   `);
 
@@ -197,16 +189,14 @@ const getPapersByYear = asyncHandler(async (req, res) => {
   res.json({ papersPerYear: data, source: 'neo4j' });
 });
 
-
-
-
-
+// ── PAPERS BY SOURCE ──────────────────────────────────────────────────────────
+// COUNT(DISTINCT p) for the same reason.
 const getPapersBySource = asyncHandler(async (req, res) => {
   guardNeo4j();
 
   const records = await runQuery(`
     MATCH (p:Paper)-[:FROM_SOURCE]->(s:Source)
-    RETURN s.name AS source, count(p) AS paperCount
+    RETURN s.name AS source, COUNT(DISTINCT p) AS paperCount
     ORDER BY paperCount DESC
   `);
 
@@ -218,10 +208,8 @@ const getPapersBySource = asyncHandler(async (req, res) => {
   res.json({ sources: data, source: 'neo4j' });
 });
 
-
-
-
-
+// ── AUTHOR PAPERS ─────────────────────────────────────────────────────────────
+// Use DISTINCT p so duplicate WROTE edges do not return the same paper twice.
 const getAuthorPapers = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { name } = req.params;
@@ -230,6 +218,7 @@ const getAuthorPapers = asyncHandler(async (req, res) => {
   const records = await runQuery(
     `
     MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)
+    WITH DISTINCT p
     OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(j:Journal)
     OPTIONAL MATCH (p)-[:PUBLISHED_YEAR]->(y:Year)
     RETURN p.paper_id AS id, p.title AS title, p.abstract AS abstract,
@@ -252,10 +241,8 @@ const getAuthorPapers = asyncHandler(async (req, res) => {
   res.json({ author: name, papers, count: papers.length, source: 'neo4j' });
 });
 
-
-
-
-
+// ── JOURNAL AUTHORS ───────────────────────────────────────────────────────────
+// COUNT(DISTINCT p) so duplicate edges don't inflate per-author paper counts.
 const getJournalAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { journal } = req.params;
@@ -265,7 +252,7 @@ const getJournalAuthors = asyncHandler(async (req, res) => {
     `
     MATCH (a:Author)-[:WROTE]->(p:Paper)-[:PUBLISHED_IN]->(j:Journal)
     WHERE j.name CONTAINS $journal
-    RETURN a.name AS author, count(p) AS paperCount, j.name AS journalName
+    RETURN a.name AS author, COUNT(DISTINCT p) AS paperCount, j.name AS journalName
     ORDER BY paperCount DESC
     LIMIT $limit
     `,
@@ -281,10 +268,8 @@ const getJournalAuthors = asyncHandler(async (req, res) => {
   res.json({ journal, authors, source: 'neo4j' });
 });
 
-
-
-
-
+// ── SEARCH AUTHORS ────────────────────────────────────────────────────────────
+// COUNT(DISTINCT p) for consistent paper counts in search results.
 const searchAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { q } = req.query;
@@ -296,7 +281,7 @@ const searchAuthors = asyncHandler(async (req, res) => {
     `
     MATCH (a:Author)-[:WROTE]->(p:Paper)
     WHERE toLower(a.name) CONTAINS toLower($q)
-    RETURN a.name AS author, count(p) AS paperCount
+    RETURN a.name AS author, COUNT(DISTINCT p) AS paperCount
     ORDER BY paperCount DESC
     LIMIT 20
     `,
@@ -311,10 +296,7 @@ const searchAuthors = asyncHandler(async (req, res) => {
   res.json({ query: q, authors, source: 'neo4j' });
 });
 
-
-
-
-
+// ── HEALTH ────────────────────────────────────────────────────────────────────
 const getHealth = asyncHandler(async (req, res) => {
   if (!isNeo4jConnected()) {
     return res.status(503).json({ status: 'disconnected', message: 'Neo4j is not connected.' });
@@ -326,7 +308,6 @@ const getHealth = asyncHandler(async (req, res) => {
     res.status(503).json({ status: 'error', message: err.message });
   }
 });
-
 
 const neo4jInt = (n) => require('neo4j-driver').int(n);
 
