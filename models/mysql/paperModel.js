@@ -19,29 +19,46 @@ class PaperModel {
   //                                when author_count >= 5 (won't apply at creation time
   //                                since author links are added after the paper row).
   static async create(paper) {
-    const connection = await getMySQL();
+    const pool = getMySQL();
+    const connection = await pool.getConnection();
     const { paper_id, title, year, journal, doi, is_covid19, has_full_text, authors, abstract } = paper;
-
-    await connection.beginTransaction();
+    const normalisedJournal = journal ? String(journal).trim() : '';
+    const normalisedAuthors = Array.isArray(authors)
+      ? authors
+          .map((author) => String(author || '').trim())
+          .filter(Boolean)
+          .filter((author, index, list) => list.indexOf(author) === index)
+      : [];
+    const createMeta = {
+      paper_id,
+      journal_id: null,
+      createdJournalId: null,
+      author_ids: [],
+      createdAuthorIds: [],
+    };
 
     try {
+      await connection.beginTransaction();
+
       // Resolve or create journal
       let journal_id = null;
-      if (journal) {
+      if (normalisedJournal) {
         const [rows] = await connection.execute(
           'SELECT journal_id FROM journals WHERE journal_name = ?',
-          [journal]
+          [normalisedJournal]
         );
         if (rows.length > 0) {
           journal_id = rows[0].journal_id;
         } else {
           const [jResult] = await connection.execute(
             'INSERT INTO journals (journal_name) VALUES (?)',
-            [journal]
+            [normalisedJournal]
           );
           journal_id = jResult.insertId;
+          createMeta.createdJournalId = journal_id;
         }
       }
+      createMeta.journal_id = journal_id;
 
       // INSERT papers — trg_validate_paper fires here (rejects short titles),
       //                 trg_after_paper_insert fires after (creates paper_metrics),
@@ -62,9 +79,9 @@ class PaperModel {
       // Insert authors — each INSERT into paper_authors fires
       // trg_after_paper_authors_insert, which increments paper_metrics.author_count.
       // When author_count reaches 5, trg_mark_important_paper sets is_important=TRUE.
-      if (authors && Array.isArray(authors)) {
-        for (let i = 0; i < authors.length; i++) {
-          const authorName = authors[i];
+      if (normalisedAuthors.length > 0) {
+        for (let i = 0; i < normalisedAuthors.length; i++) {
+          const authorName = normalisedAuthors[i];
           let author_id;
 
           const [aRows] = await connection.execute(
@@ -79,7 +96,9 @@ class PaperModel {
               [authorName]
             );
             author_id = aResult.insertId;
+            createMeta.createdAuthorIds.push(author_id);
           }
+          createMeta.author_ids.push(author_id);
 
           await connection.execute(
             'INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES (?, ?, ?)',
@@ -91,16 +110,89 @@ class PaperModel {
       }
 
       await connection.commit();
-      return result;
+      return {
+        result,
+        ...createMeta,
+      };
     } catch (error) {
       await connection.rollback();
       throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  static async compensateCreate(createContext = {}) {
+    const pool = getMySQL();
+    const connection = await pool.getConnection();
+    const {
+      paper_id,
+      journal_id = null,
+      createdJournalId = null,
+      createdAuthorIds = [],
+    } = createContext;
+
+    try {
+      await connection.beginTransaction();
+
+      if (paper_id) {
+        await connection.execute('DELETE FROM papers WHERE paper_id = ?', [paper_id]);
+      }
+
+      if (createdAuthorIds.length > 0) {
+        const authorPlaceholders = createdAuthorIds.map(() => '?').join(', ');
+        const [orphanRows] = await connection.query(
+          `
+            SELECT a.author_id
+            FROM authors a
+            LEFT JOIN paper_authors pa ON pa.author_id = a.author_id
+            WHERE a.author_id IN (${authorPlaceholders})
+            GROUP BY a.author_id
+            HAVING COUNT(pa.paper_id) = 0
+          `,
+          createdAuthorIds
+        );
+
+        if (orphanRows.length > 0) {
+          const orphanIds = orphanRows.map((row) => row.author_id);
+          const orphanPlaceholders = orphanIds.map(() => '?').join(', ');
+          await connection.query(
+            `DELETE FROM authors WHERE author_id IN (${orphanPlaceholders})`,
+            orphanIds
+          );
+        }
+      }
+
+      const journalToRefresh = createdJournalId || journal_id;
+      if (journalToRefresh) {
+        const [[journalUsage]] = await connection.execute(
+          'SELECT COUNT(*) AS paper_count FROM papers WHERE journal_id = ?',
+          [journalToRefresh]
+        );
+
+        if (createdJournalId && journalUsage.paper_count === 0) {
+          await connection.execute('DELETE FROM journals WHERE journal_id = ?', [createdJournalId]);
+        } else {
+          await connection.execute(
+            'UPDATE journals SET paper_count = ? WHERE journal_id = ?',
+            [journalUsage.paper_count, journalToRefresh]
+          );
+        }
+      }
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
   }
 
   // ── FIND ALL ──────────────────────────────────────────────────────────────
-  static async findAll(limit = 100, offset = 0, sortBy = 'recent') {
+  static async findAll(limit = 100, offset = 0, sortBy = 'recent', options = {}) {
     const connection = await getMySQL();
+    const { highlyCollaborative = false } = options;
 
     const limitInt  = parseInt(limit, 10);
     const offsetInt = parseInt(offset, 10);
@@ -118,6 +210,8 @@ class PaperModel {
       default:        orderBy = 'p.publish_year DESC, p.title ASC';
     }
 
+    const whereClause = highlyCollaborative ? 'WHERE p.is_important = TRUE' : '';
+
     const sql = `
       SELECT p.*, p.publish_year AS year, j.journal_name AS journal, s.source_name AS source,
              p.is_important,
@@ -127,6 +221,7 @@ class PaperModel {
       LEFT JOIN sources       s  ON s.source_id   = p.source_id
       LEFT JOIN paper_authors pa ON pa.paper_id   = p.paper_id
       LEFT JOIN authors       a  ON a.author_id   = pa.author_id
+      ${whereClause}
       GROUP BY p.paper_id
       ORDER BY ${orderBy}
       LIMIT ${limitInt} OFFSET ${offsetInt}
@@ -160,6 +255,7 @@ class PaperModel {
     const {
       query, yearFrom, yearTo, journal, author,
       limit = 20, offset = 0, sortBy = 'relevance',
+      highlyCollaborative = false,
     } = params;
 
     let sql = `
@@ -181,6 +277,7 @@ class PaperModel {
     if (yearTo)   { conditions.push('p.publish_year <= ?');   queryParams.push(parseInt(yearTo,   10)); }
     if (journal)  { conditions.push('j.journal_name LIKE ?'); queryParams.push(`%${journal}%`); }
     if (author)   { conditions.push('a.author_name LIKE ?');  queryParams.push(`%${author}%`); }
+    if (highlyCollaborative) { conditions.push('p.is_important = TRUE'); }
 
     if (conditions.length > 0) sql += ' AND ' + conditions.join(' AND ');
 
@@ -342,10 +439,50 @@ class PaperModel {
     return suggestions;
   }
 
-  // ── COUNT ─────────────────────────────────────────────────────────────────
-  static async count() {
+  // Returns trigger-backed paper flags for a batch of paper ids so Mongo paper
+  // documents can be enriched without switching the whole listing flow to SQL.
+  static async getFlagsByPaperIds(paperIds = []) {
     const connection = await getMySQL();
-    const [rows] = await connection.execute('SELECT COUNT(*) AS count FROM papers');
+    const normalizedIds = [...new Set(
+      paperIds
+        .map((paperId) => String(paperId || '').trim())
+        .filter(Boolean)
+    )];
+
+    if (normalizedIds.length === 0) {
+      return new Map();
+    }
+
+    const placeholders = normalizedIds.map(() => '?').join(', ');
+    const [rows] = await connection.execute(
+      `
+        SELECT p.paper_id, p.is_important, pm.author_count
+        FROM papers p
+        LEFT JOIN paper_metrics pm ON pm.paper_id = p.paper_id
+        WHERE p.paper_id IN (${placeholders})
+      `,
+      normalizedIds
+    );
+
+    return new Map(
+      rows.map((row) => [
+        String(row.paper_id),
+        {
+          is_important: row.is_important,
+          author_count: row.author_count,
+        },
+      ])
+    );
+  }
+
+  // ── COUNT ─────────────────────────────────────────────────────────────────
+  static async count(options = {}) {
+    const connection = await getMySQL();
+    const { highlyCollaborative = false } = options;
+    const sql = highlyCollaborative
+      ? 'SELECT COUNT(*) AS count FROM papers WHERE is_important = TRUE'
+      : 'SELECT COUNT(*) AS count FROM papers';
+    const [rows] = await connection.execute(sql);
     return rows[0].count;
   }
 

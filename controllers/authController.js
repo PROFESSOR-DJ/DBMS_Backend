@@ -87,13 +87,16 @@ const login = asyncHandler(async (req, res) => {
     { expiresIn: process.env.JWT_EXPIRE }
   );
 
+  await UserModel.updateLastLogin(user.user_id);
+
   res.json({
     message: 'Login successful.',
     token,
     user: {
       user_id:  user.user_id,
-      username: user.username,
+      name:     user.name,
       email:    user.email,
+      role:     user.role,
     },
   });
 });
@@ -147,7 +150,14 @@ const getProfile = asyncHandler(async (req, res) => {
   if (!user) {
     throw new AppError('User not found.', 404, 'NOT_FOUND');
   }
-  res.json(user);
+  res.json({
+    user_id:    user.user_id,
+    name:       user.name,
+    email:      user.email,
+    role:       user.role || 'researcher',
+    created_at: user.created_at,
+    last_login: user.last_login || null,
+  });
 });
 
 
@@ -159,10 +169,32 @@ const updateProfile = asyncHandler(async (req, res) => {
   if (!name && !email) {
     throw new AppError('Provide at least one field to update (name or email).', 400, 'MISSING_FIELDS');
   }
+  const updates = {};
+
+  if (name !== undefined) updates.name = String(name).trim();
+  if (email !== undefined) updates.email = String(email).trim().toLowerCase();
+
+  if (updates.name !== undefined && updates.name.length === 0) {
+    throw new AppError('Name cannot be empty.', 400, 'INVALID_PARAM');
+  }
+
+  if (updates.email !== undefined) {
+    if (updates.email.length === 0) {
+      throw new AppError('Email cannot be empty.', 400, 'INVALID_PARAM');
+    }
+
+    const existingUser = await UserModel.findByEmail(updates.email);
+    if (existingUser && existingUser.user_id !== req.user.user_id) {
+      throw new AppError('An account with this email already exists.', 409, 'DUPLICATE_ENTRY');
+    }
+  }
+
+  await UserModel.updateProfile(req.user.user_id, updates);
+  const user = await UserModel.findById(req.user.user_id);
 
   res.json({
     message: 'Profile updated successfully.',
-    user: { ...req.user, name, email },
+    user,
   });
 });
 

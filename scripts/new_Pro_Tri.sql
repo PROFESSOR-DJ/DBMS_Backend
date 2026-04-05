@@ -49,18 +49,20 @@ SET paper_count = (
 -- Procedures
 
 -- Trending Papers
+DROP PROCEDURE IF EXISTS GetTrendingPapers;
 CREATE PROCEDURE GetTrendingPapers(IN p_year INT, IN p_limit INT)
 BEGIN
     SELECT 
         p.paper_id,
         p.title,
+        p.publish_year AS year,
         j.journal_name,
         pm.author_count
     FROM papers p
     JOIN paper_metrics pm ON p.paper_id = pm.paper_id
     LEFT JOIN journals j ON p.journal_id = j.journal_id
     WHERE p.publish_year >= p_year
-    ORDER BY pm.author_count DESC
+    ORDER BY pm.author_count DESC, p.publish_year DESC
     LIMIT p_limit;
 END;
 

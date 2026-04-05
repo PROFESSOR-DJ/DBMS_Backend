@@ -10,13 +10,16 @@ const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler
 const getAllAuthors = asyncHandler(async (req, res) => {
   const limit  = parseInt(req.query.limit,  10) || 100;
   const offset = parseInt(req.query.offset, 10) || 0;
+  const sortBy = ['recent', 'name', 'papers'].includes(req.query.sortBy)
+    ? req.query.sortBy
+    : 'recent';
 
   if (isNaN(limit) || isNaN(offset) || limit < 1 || offset < 0) {
     throw new AppError('Invalid pagination parameters.', 400, 'INVALID_PARAM');
   }
 
-  const authors = await AuthorModel.findAll(limit, offset);
-  res.json({ authors, count: authors.length, limit, offset });
+  const authors = await AuthorModel.findAll(limit, offset, sortBy);
+  res.json({ authors, count: authors.length, limit, offset, sortBy });
 });
 
 // ── SEARCH AUTHORS ────────────────────────────────────────────────────────────

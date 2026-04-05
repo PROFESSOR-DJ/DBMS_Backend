@@ -12,7 +12,7 @@ router.get('/overview',           statsController.getOverview);
 // Author impact — uses stored procedure GetAuthorImpact()
 router.get('/authors',            statsController.getAuthorStats);
 
-// Journal stats — MongoDB aggregation
+// Journal stats — direct journals table listing with sorting/search
 router.get('/journals',           statsController.getJournalStats);
 
 // Papers per year — MongoDB aggregation

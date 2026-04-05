@@ -83,16 +83,33 @@ class AuthorModel {
   }
 
   // ── FIND ALL ──────────────────────────────────────────────────────────────
-  static async findAll(limit = 100, offset = 0) {
+  static async findAll(limit = 100, offset = 0, sortBy = 'recent') {
     const limitInt  = parseInt(limit,  10);
     const offsetInt = parseInt(offset, 10);
     if (!Number.isInteger(limitInt) || !Number.isInteger(offsetInt)) {
       throw new Error('Invalid pagination parameters');
     }
 
+    let orderBy = 'a.created_at DESC, a.author_id DESC';
+    switch (sortBy) {
+      case 'name':
+        orderBy = 'a.author_name ASC';
+        break;
+      case 'papers':
+        orderBy = 'paper_count DESC, a.author_name ASC';
+        break;
+      case 'recent':
+      default:
+        orderBy = 'a.created_at DESC, a.author_id DESC';
+        break;
+    }
+
     const sql = `
-      SELECT * FROM authors
-      ORDER BY author_name
+      SELECT a.*, COUNT(pa.paper_id) AS paper_count
+      FROM   authors a
+      LEFT JOIN paper_authors pa ON pa.author_id = a.author_id
+      GROUP BY a.author_id
+      ORDER BY ${orderBy}
       LIMIT ${limitInt} OFFSET ${offsetInt}
     `;
     const [rows] = await (await getMySQL()).query(sql);
