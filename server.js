@@ -16,7 +16,7 @@ const paperRoutes  = require('./routes/paperRoutes');
 const statsRoutes  = require('./routes/statsRoutes');
 const hybridRoutes = require('./routes/hybridRoutes');
 const authorRoutes = require('./routes/authorRoutes');
-
+const journalRoutes = require('./routes/journalRoutes');
 const app = express();
 
 
@@ -50,7 +50,7 @@ app.use('/api/stats',   statsRoutes);
 app.use('/api/hybrid',  hybridRoutes);
 app.use('/api/authors', authorRoutes);
 app.use('/api/graph',   graphRoutes);
-
+app.use('/api/journals', journalRoutes);
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status:    'OK',
