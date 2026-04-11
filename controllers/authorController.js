@@ -4,7 +4,11 @@
 //   The old manual JS pre-check has been removed; the trigger is the single source of truth.
 
 const AuthorModel = require('../models/mysql/authorModel');
+const PaperDocument = require('../models/mongodb/paperModel');
+const { runQuery, isNeo4jConnected } = require('../config/neo4jDatabase');
 const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler');
+
+const paperDocument = new PaperDocument();
 
 // ── GET ALL AUTHORS ───────────────────────────────────────────────────────────
 const getAllAuthors = asyncHandler(async (req, res) => {
@@ -31,6 +35,89 @@ const searchAuthors = asyncHandler(async (req, res) => {
 
   const authors = await AuthorModel.searchByName(q.trim());
   res.json({ authors, count: authors.length, query: q });
+});
+
+const getAuthorInsights = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const author = await AuthorModel.findById(id);
+
+  if (!author) {
+    throw new AppError(`Author with id '${id}' not found.`, 404, 'NOT_FOUND');
+  }
+
+  const papers = await AuthorModel.getPapersByAuthor(author.author_name);
+
+  const mysqlSummary = {
+    author_id: author.author_id,
+    author_name: author.author_name,
+    paper_count: papers.length,
+    latest_year: papers[0]?.publish_year || null,
+    papers: papers.slice(0, 8),
+  };
+
+  const [mongoSummary, graphSummary] = await Promise.all([
+    paperDocument.getAuthorInsights(author.author_name, 5).catch(() => ({
+      paper_count: 0,
+      total_citations: 0,
+      avg_citations: 0,
+      first_year: null,
+      latest_year: null,
+      top_keywords: [],
+      top_journals: [],
+      recent_papers: [],
+      warning: 'MongoDB author insight lookup failed.',
+    })),
+    (async () => {
+      if (!isNeo4jConnected()) {
+        return {
+          coauthors: [],
+          collaboration_strength: 0,
+          source: 'neo4j',
+          warning: 'Neo4j is not connected.',
+        };
+      }
+
+      const records = await runQuery(
+        `
+        MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)<-[:WROTE]-(co:Author)
+        WHERE co.name <> $name
+        RETURN co.name AS coauthor, COUNT(DISTINCT p) AS sharedPapers
+        ORDER BY sharedPapers DESC, coauthor ASC
+        LIMIT 8
+        `,
+        { name: author.author_name }
+      );
+
+      const coauthors = records.map((record) => ({
+        name: record.get('coauthor'),
+        shared_papers: typeof record.get('sharedPapers')?.toNumber === 'function'
+          ? record.get('sharedPapers').toNumber()
+          : Number(record.get('sharedPapers') || 0),
+      }));
+
+      return {
+        coauthors,
+        collaboration_strength: coauthors.reduce((sum, item) => sum + item.shared_papers, 0),
+        source: 'neo4j',
+      };
+    })(),
+  ]);
+
+  res.json({
+    author: {
+      author_id: author.author_id,
+      author_name: author.author_name,
+      created_at: author.created_at || null,
+    },
+    mysql: mysqlSummary,
+    mongodb: mongoSummary,
+    neo4j: graphSummary,
+    use_cases: {
+      mysql: 'Structured author-paper list and edit-safe author identity.',
+      mongodb: 'Discovery signals such as keywords, citations, and recent topical coverage.',
+      neo4j: 'Collaboration context and strongest co-author links.',
+    },
+  });
 });
 
 // ── CREATE AUTHOR ─────────────────────────────────────────────────────────────
@@ -158,6 +245,7 @@ const deleteAuthor = asyncHandler(async (req, res) => {
 module.exports = {
   getAllAuthors,
   searchAuthors,
+  getAuthorInsights,
   createAuthor,
   updateAuthor,
   deleteAuthor,

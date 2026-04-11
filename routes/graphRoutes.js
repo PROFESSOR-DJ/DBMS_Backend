@@ -12,6 +12,7 @@ router.get('/top-journals',            neo4jCtrl.getTopJournals);
 router.get('/papers-by-year',          neo4jCtrl.getPapersByYear);
 router.get('/papers-by-source',        neo4jCtrl.getPapersBySource);
 router.get('/search-authors',          neo4jCtrl.searchAuthors);
+router.post('/conflict-check',         authenticate, neo4jCtrl.checkConflictOfInterest);
 
 
 router.get('/author-network/:name',    neo4jCtrl.getAuthorNetwork);

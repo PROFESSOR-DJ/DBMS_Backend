@@ -244,6 +244,45 @@ const searchPapers = asyncHandler(async (req, res) => {
   });
 });
 
+const findSimilarPapers = asyncHandler(async (req, res) => {
+  const { title, abstract } = req.query;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 20);
+  const searchText = [title, abstract].filter(Boolean).join(' ').trim();
+
+  if (!searchText || searchText.length < 10) {
+    throw new AppError('Provide title or abstract text with at least 10 characters.', 400, 'MISSING_PARAM');
+  }
+
+  const results = await paperDocument.getCollection()
+    .find(
+      { $text: { $search: searchText } },
+      {
+        projection: {
+          title: 1,
+          paper_id: 1,
+          year: 1,
+          journal: 1,
+          authors: 1,
+          score: { $meta: 'textScore' },
+        },
+      }
+    )
+    .sort({ score: { $meta: 'textScore' } })
+    .limit(limit)
+    .toArray();
+
+  res.json({
+    query: {
+      title,
+      abstract: abstract ? String(abstract).substring(0, 80) : undefined,
+    },
+    similar_papers: results,
+    count: results.length,
+    source: 'mongodb',
+    note: 'Ranked by MongoDB textScore against title and abstract.',
+  });
+});
+
 // ── GET PAPERS BY YEAR ────────────────────────────────────────────────────────
 const getPapersByYear = asyncHandler(async (req, res) => {
   const { year } = req.params;
@@ -469,6 +508,7 @@ module.exports = {
   getAllPapers,
   getPaperById,
   searchPapers,
+  findSimilarPapers,
   getPapersByYear,
   getPapersByJournal,
   getPapersByAuthor,

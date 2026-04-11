@@ -7,6 +7,7 @@ const authController = require('../controllers/authController');
 
 router.get('/', authorController.getAllAuthors);
 router.get('/search', authorController.searchAuthors);
+router.get('/:id/insights', authorController.getAuthorInsights);
 
 
 router.post('/', authController.authenticate, authorController.createAuthor);

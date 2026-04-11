@@ -18,6 +18,11 @@ const guardNeo4j = () => {
   }
 };
 
+const cleanAuthorDisplayName = (name) => String(name || '')
+  .trim()
+  .replace(/^[\s'"[\]]+|[\s'"[\]]+$/g, '')
+  .replace(/\s+/g, ' ');
+
 // ── GRAPH STATS ───────────────────────────────────────────────────────────────
 const getGraphStats = asyncHandler(async (req, res) => {
   guardNeo4j();
@@ -30,7 +35,11 @@ const getGraphStats = asyncHandler(async (req, res) => {
       MATCH (a:Author)  RETURN count(a)   AS authors
     }
     CALL {
-      MATCH (j:Journal) RETURN count(j)   AS journals
+      MATCH (j:Journal)
+      RETURN count(j) AS journals,
+             sum(CASE WHEN j.sjr_rank IS NOT NULL THEN 1 ELSE 0 END) AS ranked_journals,
+             sum(CASE WHEN j.best_quartile = 'Q1' THEN 1 ELSE 0 END) AS q1_journals,
+             sum(CASE WHEN coalesce(j.oa, false) = true THEN 1 ELSE 0 END) AS open_access_journals
     }
     CALL {
       MATCH (s:Source)  RETURN count(s)   AS sources
@@ -41,7 +50,7 @@ const getGraphStats = asyncHandler(async (req, res) => {
     CALL {
       MATCH ()-[r]->()  RETURN count(r)   AS relationships
     }
-    RETURN papers, authors, journals, sources, years, relationships
+    RETURN papers, authors, journals, ranked_journals, q1_journals, open_access_journals, sources, years, relationships
   `);
 
   const r = records[0];
@@ -50,6 +59,9 @@ const getGraphStats = asyncHandler(async (req, res) => {
       papers:        toNum(r.get('papers')),
       authors:       toNum(r.get('authors')),
       journals:      toNum(r.get('journals')),
+      ranked_journals: toNum(r.get('ranked_journals')),
+      q1_journals:   toNum(r.get('q1_journals')),
+      open_access_journals: toNum(r.get('open_access_journals')),
       sources:       toNum(r.get('sources')),
       years:         toNum(r.get('years')),
       relationships: toNum(r.get('relationships')),
@@ -140,6 +152,7 @@ const getTopAuthors = asyncHandler(async (req, res) => {
 
   const authors = records.map(r => ({
     name:       r.get('author'),
+    displayName: cleanAuthorDisplayName(r.get('author')),
     paperCount: toNum(r.get('paperCount')),
   }));
 
@@ -155,8 +168,16 @@ const getTopJournals = asyncHandler(async (req, res) => {
   const records = await runQuery(
     `
     MATCH (p:Paper)-[:PUBLISHED_IN]->(j:Journal)
-    RETURN j.name AS journal, COUNT(DISTINCT p) AS paperCount
-    ORDER BY paperCount DESC
+    RETURN j.name AS journal,
+           COUNT(DISTINCT p) AS paperCount,
+           j.sjr_rank AS sjrRank,
+           j.sjr_index AS sjrIndex,
+           j.best_quartile AS quartile,
+           j.h_index AS hIndex,
+           j.citescore AS citeScore,
+           j.country AS country,
+           j.oa AS openAccess
+    ORDER BY paperCount DESC, coalesce(j.sjr_index, 0) DESC, journal ASC
     LIMIT $limit
     `,
     { limit: neo4jInt(limit) }
@@ -165,6 +186,13 @@ const getTopJournals = asyncHandler(async (req, res) => {
   const journals = records.map(r => ({
     name:       r.get('journal'),
     paperCount: toNum(r.get('paperCount')),
+    sjrRank:    r.get('sjrRank'),
+    sjrIndex:   r.get('sjrIndex') === null ? null : Number(r.get('sjrIndex')),
+    quartile:   r.get('quartile'),
+    hIndex:     r.get('hIndex') === null ? null : toNum(r.get('hIndex')),
+    citeScore:  r.get('citeScore') === null ? null : Number(r.get('citeScore')),
+    country:    r.get('country'),
+    openAccess: r.get('openAccess'),
   }));
 
   res.json({ journals, source: 'neo4j' });
@@ -273,19 +301,25 @@ const getJournalAuthors = asyncHandler(async (req, res) => {
 const searchAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { q } = req.query;
-  if (!q || q.trim().length < 2) {
+  const query = String(q || '').trim().replace(/^['"]+|['"]+$/g, '');
+
+  if (!query || query.length < 2) {
     throw new AppError('Query must be at least 2 characters.', 400, 'MISSING_PARAM');
   }
 
   const records = await runQuery(
     `
-    MATCH (a:Author)-[:WROTE]->(p:Paper)
+    MATCH (a:Author)
     WHERE toLower(a.name) CONTAINS toLower($q)
+    WITH a
+    ORDER BY a.name ASC
+    LIMIT 50
+    OPTIONAL MATCH (a)-[:WROTE]->(p:Paper)
     RETURN a.name AS author, COUNT(DISTINCT p) AS paperCount
     ORDER BY paperCount DESC
     LIMIT 20
     `,
-    { q: q.trim() }
+    { q: query }
   );
 
   const authors = records.map(r => ({
@@ -293,7 +327,86 @@ const searchAuthors = asyncHandler(async (req, res) => {
     paperCount: toNum(r.get('paperCount')),
   }));
 
-  res.json({ query: q, authors, source: 'neo4j' });
+  res.json({ query, authors, source: 'neo4j' });
+});
+
+// CONFLICT OF INTEREST CHECK
+const checkConflictOfInterest = asyncHandler(async (req, res) => {
+  guardNeo4j();
+
+  const reviewer = String(req.body.reviewer || '').trim();
+  const authors = Array.isArray(req.body.authors)
+    ? req.body.authors.map(author => String(author || '').trim()).filter(Boolean)
+    : [];
+
+  if (!reviewer || reviewer.length < 2) {
+    throw new AppError('Reviewer name must be at least 2 characters.', 400, 'MISSING_PARAM');
+  }
+  if (!authors.length) {
+    throw new AppError('Provide at least one paper author.', 400, 'MISSING_PARAM');
+  }
+
+  const uniqueAuthors = [...new Set(authors)].filter(author => author !== reviewer);
+
+  if (!uniqueAuthors.length) {
+    return res.json({
+      reviewer,
+      conflicts: authors.map(author => ({
+        author,
+        direct: author === reviewer ? 1 : 0,
+        indirect: 0,
+        conflict_level: author === reviewer ? 'HIGH' : 'NONE',
+      })),
+      overall_conflict_level: authors.includes(reviewer) ? 'HIGH' : 'NONE',
+      source: 'neo4j',
+    });
+  }
+
+  const records = await runQuery(
+    `
+    UNWIND $authors AS paperAuthor
+    MATCH (r:Author {name: $reviewer})
+    OPTIONAL MATCH directPath = (r)-[:WROTE]->(:Paper)<-[:WROTE]-(directAuthor:Author {name: paperAuthor})
+    OPTIONAL MATCH indirectPath = (r)-[:WROTE]->(:Paper)<-[:WROTE]-(sharedAuthor:Author)
+      -[:WROTE]->(:Paper)<-[:WROTE]-(indirectAuthor:Author {name: paperAuthor})
+    WHERE sharedAuthor.name <> r.name
+      AND sharedAuthor.name <> paperAuthor
+    RETURN paperAuthor,
+           count(DISTINCT directPath) AS direct_coauthorships,
+           count(DISTINCT indirectPath) AS indirect_connections
+    `,
+    { reviewer, authors: uniqueAuthors }
+  );
+
+  const found = new Map(records.map((record) => {
+    const direct = toNum(record.get('direct_coauthorships'));
+    const indirect = toNum(record.get('indirect_connections'));
+    return [record.get('paperAuthor'), {
+      author: record.get('paperAuthor'),
+      direct,
+      indirect,
+      conflict_level: direct > 0 ? 'HIGH' : indirect > 0 ? 'MEDIUM' : 'NONE',
+    }];
+  }));
+
+  const conflicts = authors.map((author) => {
+    if (author === reviewer) {
+      return { author, direct: 1, indirect: 0, conflict_level: 'HIGH' };
+    }
+    return found.get(author) || { author, direct: 0, indirect: 0, conflict_level: 'NONE' };
+  });
+
+  const overallConflictLevel =
+    conflicts.some(c => c.conflict_level === 'HIGH') ? 'HIGH' :
+    conflicts.some(c => c.conflict_level === 'MEDIUM') ? 'MEDIUM' : 'NONE';
+
+  res.json({
+    reviewer,
+    conflicts,
+    overall_conflict_level: overallConflictLevel,
+    source: 'neo4j',
+    rule: 'HIGH = direct co-author; MEDIUM = shared co-author within 2 hops',
+  });
 });
 
 // ── HEALTH ────────────────────────────────────────────────────────────────────
@@ -321,5 +434,6 @@ module.exports = {
   getAuthorPapers,
   getJournalAuthors,
   searchAuthors,
+  checkConflictOfInterest,
   getHealth,
 };

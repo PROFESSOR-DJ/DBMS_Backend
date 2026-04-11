@@ -61,8 +61,18 @@ const connectMongoDB = async () => {
 
       if (!hasTextIndex) {
         await papersCollection.createIndex(
-          { title: 'text', abstract: 'text' },
-          { name: 'text_search' }
+          { title: 'text', abstract: 'text', authors: 'text', journal: 'text', keywords: 'text', doi: 'text' },
+          {
+            name: 'text_search',
+            weights: {
+              title: 10,
+              authors: 8,
+              journal: 4,
+              keywords: 3,
+              abstract: 2,
+              doi: 1,
+            },
+          }
         );
         console.log('   ✓ Created text search index');
       }

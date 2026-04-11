@@ -7,6 +7,7 @@ const authController = require('../controllers/authController');
 
 router.get('/', paperController.getAllPapers);
 router.get('/search', paperController.searchPapers);
+router.get('/similar', paperController.findSimilarPapers);
 router.get('/filters', paperController.getFilterOptions);
 router.get('/suggestions', paperController.getSuggestions);
 router.get('/:id', paperController.getPaperById);

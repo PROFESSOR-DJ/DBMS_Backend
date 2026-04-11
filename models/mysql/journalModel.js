@@ -42,7 +42,7 @@ class JournalModel {
     const sql = `
       SELECT
         jr.journal_ranking_id,
-        jr.sjr_rank AS rank,
+        jr.sjr_rank AS journal_rank,
         jr.title,
         jr.oa,
         jr.country,
@@ -66,7 +66,10 @@ class JournalModel {
     `;
 
     const [rows] = await connection.query(sql, params);
-    return rows;
+    return rows.map((row) => ({
+      ...row,
+      rank: row.journal_rank,
+    }));
   }
 
   static async countSearch({ q = '', country, oa, quartile }) {

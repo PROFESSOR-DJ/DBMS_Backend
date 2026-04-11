@@ -11,6 +11,8 @@ router.get('/overview',           statsController.getOverview);
 
 // Author impact — uses stored procedure GetAuthorImpact()
 router.get('/authors',            statsController.getAuthorStats);
+router.get('/author-track',       statsController.getAuthorTrackRecord);
+router.get('/author-track/:name', statsController.getAuthorTrackRecord);
 
 // Journal stats — direct journals table listing with sorting/search
 router.get('/journals',           statsController.getJournalStats);

@@ -2,6 +2,8 @@
 const { getMongoDB } = require('../../config/database');
 const { ObjectId } = require('mongodb');
 
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 class PaperDocument {
   getCollection() {
     try {
@@ -97,10 +99,6 @@ class PaperDocument {
 
     const filter = {};
 
-    if (query) {
-      filter.$text = { $search: query };
-    }
-
     if (yearFrom || yearTo) {
       filter.year = {};
       if (yearFrom) filter.year.$gte = parseInt(yearFrom);
@@ -113,6 +111,16 @@ class PaperDocument {
     if (keywords)     filter.keywords  = { $regex: keywords, $options: 'i' };
     if (abstract)     filter.abstract  = { $regex: abstract, $options: 'i' };
     if (doi)          filter.doi       = doi;
+
+    if (query) {
+      return this.broadSearch({
+        query,
+        baseFilter: filter,
+        limit,
+        offset,
+        sortBy,
+      });
+    }
 
     const total = await collection.countDocuments(filter);
 
@@ -141,6 +149,75 @@ class PaperDocument {
 
     const papers = await cursor.toArray();
     return { papers, total };
+  }
+
+  async broadSearch({ query, baseFilter = {}, limit = 20, offset = 0, sortBy = 'relevance' }) {
+    const collection = this.getCollection();
+    const safeLimit = Math.max(1, Math.min(parseInt(limit, 10) || 20, 100));
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const escapedQuery = escapeRegex(query);
+    const textFilter = { ...baseFilter, $text: { $search: query } };
+
+    try {
+      const textCursor = collection
+        .find(
+          textFilter,
+          {
+            projection: {
+              paper_id: 1,
+              title: 1,
+              abstract: 1,
+              authors: 1,
+              doi: 1,
+              has_full_text: 1,
+              is_covid19: 1,
+              journal: 1,
+              sha: 1,
+              source: 1,
+              year: 1,
+              citation_count: 1,
+              keywords: 1,
+              score: { $meta: 'textScore' },
+            },
+          }
+        )
+        .sort({ score: { $meta: 'textScore' }, year: -1 })
+        .skip(safeOffset)
+        .limit(safeLimit);
+
+      const [papers, total] = await Promise.all([
+        textCursor.toArray(),
+        collection.countDocuments(textFilter),
+      ]);
+
+      if (papers.length > 0) {
+        return { papers, total };
+      }
+    } catch {
+      // Fall through to regex search if the text index is missing or invalid.
+    }
+
+    const regexFilter = {
+      ...baseFilter,
+      $or: [
+        { title: { $regex: escapedQuery, $options: 'i' } },
+        { abstract: { $regex: escapedQuery, $options: 'i' } },
+        { authors: { $regex: escapedQuery, $options: 'i' } },
+        { journal: { $regex: escapedQuery, $options: 'i' } },
+        { keywords: { $regex: escapedQuery, $options: 'i' } },
+        { doi: { $regex: escapedQuery, $options: 'i' } },
+      ],
+    };
+
+    const papers = await collection
+      .find(regexFilter)
+      .sort(sortBy === 'title' ? { title: 1 } : { year: -1, title: 1 })
+      .skip(safeOffset)
+      .limit(safeLimit)
+      .maxTimeMS(15000)
+      .toArray();
+
+    return { papers, total: safeOffset + papers.length + (papers.length === safeLimit ? 1 : 0) };
   }
 
   
@@ -341,6 +418,72 @@ class PaperDocument {
         }
       }
     ]).toArray();
+  }
+
+  async getAuthorInsights(authorName, limit = 5) {
+    const collection = this.getCollection();
+    const safeLimit = Math.max(1, Math.min(parseInt(limit, 10) || 5, 20));
+    const escaped = authorName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const authorRegex = new RegExp(`^${escaped}$`, 'i');
+
+    const [summary] = await collection.aggregate([
+      { $match: { authors: authorRegex } },
+      {
+        $facet: {
+          totals: [
+            {
+              $group: {
+                _id: null,
+                paper_count: { $sum: 1 },
+                total_citations: { $sum: { $ifNull: ['$citation_count', 0] } },
+                avg_citations: { $avg: { $ifNull: ['$citation_count', 0] } },
+                first_year: { $min: '$year' },
+                latest_year: { $max: '$year' },
+              },
+            },
+          ],
+          top_keywords: [
+            { $unwind: '$keywords' },
+            { $group: { _id: '$keywords', count: { $sum: 1 } } },
+            { $sort: { count: -1, _id: 1 } },
+            { $limit: safeLimit },
+          ],
+          top_journals: [
+            { $match: { journal: { $nin: [null, ''] } } },
+            { $group: { _id: '$journal', count: { $sum: 1 } } },
+            { $sort: { count: -1, _id: 1 } },
+            { $limit: safeLimit },
+          ],
+          recent_papers: [
+            { $sort: { year: -1, citation_count: -1, title: 1 } },
+            { $limit: safeLimit },
+            {
+              $project: {
+                _id: 0,
+                paper_id: 1,
+                title: 1,
+                journal: 1,
+                year: 1,
+                citation_count: 1,
+                keywords: { $slice: [{ $ifNull: ['$keywords', []] }, 5] },
+              },
+            },
+          ],
+        },
+      },
+    ]).toArray();
+
+    const totals = summary?.totals?.[0] || {};
+    return {
+      paper_count: totals.paper_count || 0,
+      total_citations: totals.total_citations || 0,
+      avg_citations: Math.round((totals.avg_citations || 0) * 100) / 100,
+      first_year: totals.first_year || null,
+      latest_year: totals.latest_year || null,
+      top_keywords: (summary?.top_keywords || []).map(item => ({ keyword: item._id, count: item.count })),
+      top_journals: (summary?.top_journals || []).map(item => ({ journal: item._id, count: item.count })),
+      recent_papers: summary?.recent_papers || [],
+    };
   }
 
   async getDistinct(field) {

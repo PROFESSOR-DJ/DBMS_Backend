@@ -7,6 +7,7 @@ const PaperModel     = require('../models/mysql/paperModel');
 const AuthorModel    = require('../models/mysql/authorModel');
 const PaperDocument  = require('../models/mongodb/paperModel');
 const { getMySQL }   = require('../config/database');
+const { runQuery, isNeo4jConnected } = require('../config/neo4jDatabase');
 const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler');
 
 const paperDocument = new PaperDocument();
@@ -156,12 +157,62 @@ const enrichPaperRows = async (pool, rows) => {
   });
 };
 
+const getDashboardGraphHighlights = async () => {
+  if (!isNeo4jConnected()) {
+    return {
+      connected: false,
+      collaboration_edges: 0,
+      ranked_journals: 0,
+      top_collaborators: [],
+      note: 'Neo4j is not connected.',
+    };
+  }
+
+  const [summaryRecord] = await runQuery(`
+    CALL {
+      MATCH (:Author)-[r:WROTE]->(:Paper)
+      RETURN count(r) AS wrote_edges
+    }
+    CALL {
+      MATCH (j:Journal)
+      RETURN count(CASE WHEN j.sjr_rank IS NOT NULL THEN 1 END) AS ranked_journals
+    }
+    RETURN wrote_edges, ranked_journals
+  `);
+
+  const collaboratorRecords = await runQuery(`
+    MATCH (a:Author)-[:WROTE]->(p:Paper)<-[:WROTE]-(co:Author)
+    WHERE a.name <> co.name
+    WITH a.name AS author, count(DISTINCT p) AS collaboration_score
+    RETURN author, collaboration_score
+    ORDER BY collaboration_score DESC, author ASC
+    LIMIT 5
+  `);
+
+  const toNumber = (value) => {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number') return value;
+    if (typeof value.toNumber === 'function') return value.toNumber();
+    return Number(value);
+  };
+
+  return {
+    connected: true,
+    collaboration_edges: toNumber(summaryRecord?.get('wrote_edges')),
+    ranked_journals: toNumber(summaryRecord?.get('ranked_journals')),
+    top_collaborators: collaboratorRecords.map((record) => ({
+      author: record.get('author'),
+      collaboration_score: toNumber(record.get('collaboration_score')),
+    })),
+  };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /stats/overview
 // Combines MySQL + MongoDB stats in parallel.
 // ─────────────────────────────────────────────────────────────────────────────
 const getOverview = asyncHandler(async (req, res) => {
-  const [mysqlStats, mongoStats, papersPerYear, topJournals, topAuthors] = await Promise.all([
+  const [mysqlStats, mongoStats, papersPerYear, topJournals, topAuthors, importantPreview, incompletePreview, activeUsersPreview, graphHighlights, keywordHighlights] = await Promise.all([
     (async () => {
       try {
         const totalPapers  = await PaperModel.count();
@@ -215,6 +266,75 @@ const getOverview = asyncHandler(async (req, res) => {
         return [];
       }
     })(),
+
+    (async () => {
+      try {
+        const pool = getMySQL();
+        const [rows] = await pool.query(
+          `SELECT p.paper_id, p.title, p.publish_year AS year,
+                  j.journal_name AS journal, pm.author_count
+           FROM papers p
+           JOIN paper_metrics pm ON pm.paper_id = p.paper_id
+           LEFT JOIN journals j ON j.journal_id = p.journal_id
+           WHERE p.is_important = TRUE
+           ORDER BY pm.author_count DESC, p.publish_year DESC, p.title ASC
+           LIMIT 6`
+        );
+        return rows.map(normalisePaperInsight);
+      } catch (err) {
+        console.error('MySQL importantPreview error:', classifyError(err).message);
+        return [];
+      }
+    })(),
+
+    (async () => {
+      try {
+        const pool = getMySQL();
+        const [[countRow]] = await pool.query(
+          `SELECT COUNT(*) AS total
+           FROM papers
+           WHERE abstract IS NULL OR journal_id IS NULL OR publish_year IS NULL`
+        );
+        return { total: Number(countRow?.total) || 0 };
+      } catch (err) {
+        console.error('MySQL incompletePreview error:', classifyError(err).message);
+        return { total: 0 };
+      }
+    })(),
+
+    (async () => {
+      try {
+        const pool = getMySQL();
+        const [rows] = await pool.query(
+          `SELECT user_id, name, last_login
+           FROM users
+           ORDER BY last_login DESC
+           LIMIT 5`
+        );
+        return rows;
+      } catch (err) {
+        console.error('MySQL activeUsersPreview error:', classifyError(err).message);
+        return [];
+      }
+    })(),
+
+    getDashboardGraphHighlights().catch((err) => ({
+      connected: false,
+      collaboration_edges: 0,
+      ranked_journals: 0,
+      top_collaborators: [],
+      note: classifyError(err).message,
+    })),
+
+    (async () => {
+      try {
+        const options = await paperDocument.getFilterOptions();
+        return (options.keywords || []).slice(0, 8);
+      } catch (err) {
+        console.error('MongoDB keywordHighlights error:', classifyError(err).message);
+        return [];
+      }
+    })(),
   ]);
 
   res.json({
@@ -234,16 +354,38 @@ const getOverview = asyncHandler(async (req, res) => {
         role:            'Document storage, full-text search, aggregation analytics',
         ...(mongoStats.error && { warning: mongoStats.error }),
       },
+      neo4j: {
+        collaboration_edges: graphHighlights.collaboration_edges,
+        ranked_journals: graphHighlights.ranked_journals,
+        role: 'Relationship traversal, collaboration context, venue-network overlays',
+        ...(graphHighlights.note && { warning: graphHighlights.note }),
+      },
     },
     analytics: {
       papers_per_year: papersPerYear,
       top_journals:    topJournals,
       top_authors:     topAuthors,
     },
+    research_highlights: {
+      dashboard_story: {
+        recommended_use: 'Use Dashboard for cross-database orientation before drilling into authors, papers, journals, or graph exploration.',
+      },
+      mysql_curation: {
+        important_papers: importantPreview,
+        incomplete_paper_count: incompletePreview.total,
+        active_users: activeUsersPreview,
+      },
+      mongodb_discovery: {
+        top_keywords: keywordHighlights,
+        avg_citations: mongoStats.avgCitations,
+      },
+      neo4j_network: graphHighlights,
+    },
     optimisation: {
       parallel_execution:    'All queries run concurrently via Promise.all',
       sql_optimisation:      'COUNT on indexed primary keys',
       mongodb_optimisation:  'Aggregation pipelines with compound indexes',
+      graph_optimisation:    'Neo4j powers collaboration snapshots and venue relationship views without SQL-style multi-hop joins.',
     },
   });
 });
@@ -280,6 +422,35 @@ const getAuthorStats = asyncHandler(async (req, res) => {
     procedure:    'GetAuthorImpact',
     reason:       'Stored procedure aggregates paper counts per author ordered by impact.',
     query_pattern: 'CALL GetAuthorImpact()',
+  });
+});
+
+// GET /stats/author-track/:name
+// Calls stored procedure GetAuthorTrackRecord(author_name).
+const getAuthorTrackRecord = asyncHandler(async (req, res) => {
+  const authorName = String(req.query.name || req.params.name || '')
+    .trim()
+    .replace(/^[\s'"[\]]+|[\s'"[\]]+$/g, '');
+
+  if (!authorName || authorName.length < 2) {
+    throw new AppError('Author name must be at least 2 characters.', 400, 'MISSING_PARAM');
+  }
+
+  let trackRecord = null;
+  try {
+    const pool = getMySQL();
+    const [rows] = await pool.execute('CALL GetAuthorTrackRecord(?)', [authorName]);
+    trackRecord = rows[0]?.[0] || null;
+  } catch (err) {
+    throw classifyError(err);
+  }
+
+  res.json({
+    author: authorName,
+    track_record: trackRecord,
+    source: 'mysql',
+    procedure: 'GetAuthorTrackRecord',
+    query_pattern: 'CALL GetAuthorTrackRecord(?)',
   });
 });
 
@@ -640,6 +811,7 @@ const getDatabaseInfo = asyncHandler(async (req, res) => {
         stored_procedures: [
           'GetTrendingPapers(p_year, p_limit) — papers from year ordered by author_count DESC',
           'GetAuthorImpact()              — all authors with total paper counts ordered by impact',
+          'GetAuthorTrackRecord(name)     — reviewer track record with venue quartile summary',
           'GetIncompletePapers()          — papers missing abstract, journal, or publish_year',
           'GetActiveUsers()               — users ordered by last_login DESC',
         ],
@@ -732,6 +904,7 @@ const getQueryPerformance = asyncHandler(async (req, res) => {
 module.exports = {
   getOverview,
   getAuthorStats,
+  getAuthorTrackRecord,
   getJournalStats,
   getPapersPerYear,
   getTrendingPapers,
