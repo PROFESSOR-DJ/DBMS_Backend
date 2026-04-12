@@ -7,12 +7,13 @@ const AuthorModel = require('../models/mysql/authorModel');
 const PaperDocument = require('../models/mongodb/paperModel');
 const { runQuery, isNeo4jConnected } = require('../config/neo4jDatabase');
 const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler');
+const { syncAuthorCreate, syncAuthorUpdate, syncAuthorDelete } = require('../services/authorSyncService');
 
 const paperDocument = new PaperDocument();
 
 // ── GET ALL AUTHORS ───────────────────────────────────────────────────────────
 const getAllAuthors = asyncHandler(async (req, res) => {
-  const limit  = parseInt(req.query.limit,  10) || 100;
+  const limit = parseInt(req.query.limit, 10) || 100;
   const offset = parseInt(req.query.offset, 10) || 0;
   const sortBy = ['recent', 'name', 'papers'].includes(req.query.sortBy)
     ? req.query.sortBy
@@ -137,6 +138,9 @@ const createAuthor = asyncHandler(async (req, res) => {
   let result;
   try {
     result = await AuthorModel.create({ author_name: name.trim(), paper_id });
+    
+    // Sync to MongoDB and Neo4j
+    await syncAuthorCreate(name.trim(), paper_id);
   } catch (err) {
     const appErr = classifyError(err);
 
@@ -162,18 +166,18 @@ const createAuthor = asyncHandler(async (req, res) => {
   }
 
   res.status(201).json({
-    message:   'Author created and linked to paper.',
+    message: 'Author created and linked to paper.',
     author_id: result.insertId,
-    name:      name.trim(),
+    name: name.trim(),
     paper_id,
-    note:      'trg_after_paper_authors_insert has updated paper_metrics.author_count. ' +
-               'If author_count reached 5, trg_mark_important_paper flagged the paper as important.',
+    note: 'trg_after_paper_authors_insert has updated paper_metrics.author_count. ' +
+      'If author_count reached 5, trg_mark_important_paper flagged the paper as important.',
   });
 });
 
 // ── UPDATE AUTHOR ─────────────────────────────────────────────────────────────
 const updateAuthor = asyncHandler(async (req, res) => {
-  const { id }   = req.params;
+  const { id } = req.params;
   const { name } = req.body;
 
   if (!name || name.trim().length === 0) {
@@ -186,7 +190,13 @@ const updateAuthor = asyncHandler(async (req, res) => {
   }
 
   try {
-    await AuthorModel.update(id, { author_name: name.trim() });
+    const oldName = existing.author_name;
+    const newName = name.trim();
+    
+    await AuthorModel.update(id, { author_name: newName });
+    
+    // Sync to MongoDB and Neo4j
+    await syncAuthorUpdate(oldName, newName);
   } catch (err) {
     const appErr = classifyError(err);
     if (appErr.code === 'DUPLICATE_ENTRY') {
@@ -218,6 +228,9 @@ const deleteAuthor = asyncHandler(async (req, res) => {
 
   try {
     await AuthorModel.delete(id);
+    
+    // Sync to MongoDB and Neo4j
+    await syncAuthorDelete(existing.author_name);
   } catch (err) {
     const appErr = classifyError(err);
 

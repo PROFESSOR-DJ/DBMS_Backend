@@ -463,6 +463,11 @@ class PaperModel {
     );
   }
 
+  static async getPaperFlags(paper_id) {
+    const flags = await this.getFlagsByPaperIds([paper_id]);
+    return flags.get(String(paper_id)) || null;
+  }
+
   // ── COUNT ─────────────────────────────────────────────────────────────────
   static async count(options = {}) {
     const connection = await getMySQL();

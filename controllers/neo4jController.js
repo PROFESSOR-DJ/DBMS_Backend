@@ -72,25 +72,18 @@ const getGraphStats = asyncHandler(async (req, res) => {
 });
 
 // ── AUTHOR NETWORK ────────────────────────────────────────────────────────────
-// Uses DISTINCT on Paper nodes so duplicate WROTE edges (from past bulk imports)
-// do not count the same paper multiple times for co-author or paper tallies.
 const getAuthorNetwork = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { name } = req.params;
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
 
-  // COUNT(DISTINCT p) ensures a paper shared via duplicate relationships is
-  // counted only once per co-author pair.
   const records = await runQuery(
     `
-    MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)<-[:WROTE]-(coAuthor:Author)
-    WHERE coAuthor.name <> $name
-    WITH coAuthor.name AS coAuthorName,
-         COUNT(DISTINCT p) AS sharedPapers,
-         collect(DISTINCT p.title)[0..3] AS samplePapers
+    MATCH (a:Author {name: $name})-[r:CO_AUTHORED]-(coAuthor:Author)
+    RETURN coAuthor.name AS coAuthorName,
+           r.shared_papers AS sharedPapers
     ORDER BY sharedPapers DESC
     LIMIT $limit
-    RETURN coAuthorName, sharedPapers, samplePapers
     `,
     { name, limit: neo4jInt(limit) }
   );
@@ -98,10 +91,8 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
   const coAuthors = records.map(r => ({
     name:         r.get('coAuthorName'),
     sharedPapers: toNum(r.get('sharedPapers')),
-    samplePapers: r.get('samplePapers'),
   }));
 
-  // COUNT(DISTINCT p) for the author's own paper list
   const paperRecords = await runQuery(
     `
     MATCH (a:Author {name: $name})-[:WROTE]->(p:Paper)
@@ -120,13 +111,36 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
     id:      r.get('id'),
     title:   r.get('title'),
     journal: r.get('journal'),
-    year:    r.get('year'),
+    year:    toNum(r.get('year')),
+  }));
+
+  const firstAuthoredRecords = await runQuery(
+    `
+    MATCH (a:Author {name: $name})-[:FIRST_AUTHORED]->(p:Paper)
+    WITH DISTINCT p
+    OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(j:Journal)
+    OPTIONAL MATCH (p)-[:PUBLISHED_YEAR]->(y:Year)
+    RETURN p.paper_id AS id, p.title AS title,
+           j.name AS journal, y.value AS year
+    ORDER BY year DESC
+    LIMIT 10
+    `,
+    { name }
+  );
+
+  const firstAuthoredPapers = firstAuthoredRecords.map(r => ({
+    id:      r.get('id'),
+    title:   r.get('title'),
+    journal: r.get('journal'),
+    year:    toNum(r.get('year')),
   }));
 
   res.json({
     author:     name,
     paperCount: papers.length,
     papers,
+    firstAuthoredCount: firstAuthoredPapers.length,
+    firstAuthoredPapers,
     coAuthors,
     totalCoAuthors: coAuthors.length,
     source: 'neo4j',
@@ -135,7 +149,6 @@ const getAuthorNetwork = asyncHandler(async (req, res) => {
 });
 
 // ── TOP AUTHORS ───────────────────────────────────────────────────────────────
-// COUNT(DISTINCT p) prevents duplicate WROTE edges from inflating author paper counts.
 const getTopAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
@@ -160,7 +173,6 @@ const getTopAuthors = asyncHandler(async (req, res) => {
 });
 
 // ── TOP JOURNALS ──────────────────────────────────────────────────────────────
-// COUNT(DISTINCT p) prevents duplicate PUBLISHED_IN edges from inflating journal counts.
 const getTopJournals = asyncHandler(async (req, res) => {
   guardNeo4j();
   const limit = Math.min(parseInt(req.query.limit) || 10, 100);
@@ -199,7 +211,6 @@ const getTopJournals = asyncHandler(async (req, res) => {
 });
 
 // ── PAPERS BY YEAR ────────────────────────────────────────────────────────────
-// COUNT(DISTINCT p) prevents duplicate PUBLISHED_YEAR edges from double-counting.
 const getPapersByYear = asyncHandler(async (req, res) => {
   guardNeo4j();
 
@@ -210,7 +221,7 @@ const getPapersByYear = asyncHandler(async (req, res) => {
   `);
 
   const data = records.map(r => ({
-    year:       r.get('year'),
+    year:       toNum(r.get('year')),
     paperCount: toNum(r.get('paperCount')),
   }));
 
@@ -218,7 +229,6 @@ const getPapersByYear = asyncHandler(async (req, res) => {
 });
 
 // ── PAPERS BY SOURCE ──────────────────────────────────────────────────────────
-// COUNT(DISTINCT p) for the same reason.
 const getPapersBySource = asyncHandler(async (req, res) => {
   guardNeo4j();
 
@@ -237,7 +247,6 @@ const getPapersBySource = asyncHandler(async (req, res) => {
 });
 
 // ── AUTHOR PAPERS ─────────────────────────────────────────────────────────────
-// Use DISTINCT p so duplicate WROTE edges do not return the same paper twice.
 const getAuthorPapers = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { name } = req.params;
@@ -262,7 +271,7 @@ const getAuthorPapers = asyncHandler(async (req, res) => {
     title:    r.get('title'),
     abstract: r.get('abstract'),
     journal:  r.get('journal'),
-    year:     r.get('year'),
+    year:     toNum(r.get('year')),
     doi:      r.get('doi'),
   }));
 
@@ -270,7 +279,6 @@ const getAuthorPapers = asyncHandler(async (req, res) => {
 });
 
 // ── JOURNAL AUTHORS ───────────────────────────────────────────────────────────
-// COUNT(DISTINCT p) so duplicate edges don't inflate per-author paper counts.
 const getJournalAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { journal } = req.params;
@@ -297,7 +305,6 @@ const getJournalAuthors = asyncHandler(async (req, res) => {
 });
 
 // ── SEARCH AUTHORS ────────────────────────────────────────────────────────────
-// COUNT(DISTINCT p) for consistent paper counts in search results.
 const searchAuthors = asyncHandler(async (req, res) => {
   guardNeo4j();
   const { q } = req.query;
@@ -364,16 +371,14 @@ const checkConflictOfInterest = asyncHandler(async (req, res) => {
 
   const records = await runQuery(
     `
-    UNWIND $authors AS paperAuthor
+    UNWIND $authors AS paperAuthorName
     MATCH (r:Author {name: $reviewer})
-    OPTIONAL MATCH directPath = (r)-[:WROTE]->(:Paper)<-[:WROTE]-(directAuthor:Author {name: paperAuthor})
-    OPTIONAL MATCH indirectPath = (r)-[:WROTE]->(:Paper)<-[:WROTE]-(sharedAuthor:Author)
-      -[:WROTE]->(:Paper)<-[:WROTE]-(indirectAuthor:Author {name: paperAuthor})
-    WHERE sharedAuthor.name <> r.name
-      AND sharedAuthor.name <> paperAuthor
-    RETURN paperAuthor,
-           count(DISTINCT directPath) AS direct_coauthorships,
-           count(DISTINCT indirectPath) AS indirect_connections
+    OPTIONAL MATCH (r)-[direct:CO_AUTHORED]-(directAuthor:Author {name: paperAuthorName})
+    OPTIONAL MATCH (r)-[:CO_AUTHORED]-(bridge:Author)-[:CO_AUTHORED]-(indirectAuthor:Author {name: paperAuthorName})
+    WHERE bridge.name <> r.name AND bridge.name <> paperAuthorName
+    RETURN paperAuthorName AS paperAuthor,
+           SUM(DISTINCT direct.shared_papers) AS direct_coauthorships,
+           COUNT(DISTINCT bridge) AS indirect_connections
     `,
     { reviewer, authors: uniqueAuthors }
   );
@@ -409,6 +414,297 @@ const checkConflictOfInterest = asyncHandler(async (req, res) => {
   });
 });
 
+// NEW FUNCTIONS
+
+const getAuthorCollaborationStrength = asyncHandler(async (req, res) => {
+  guardNeo4j();
+  const { authorA, authorB } = req.query;
+
+  if (!authorA || !authorB) {
+    throw new AppError('Both authorA and authorB are required.', 400, 'MISSING_PARAM');
+  }
+
+  // Direct connection check via CO_AUTHORED
+  const directRecords = await runQuery(
+    `
+    MATCH (a:Author {name: $authorA})-[r:CO_AUTHORED]-(b:Author {name: $authorB})
+    RETURN r.shared_papers AS sharedPapers, true AS directLink
+    `,
+    { authorA, authorB }
+  );
+
+  // Two-hop path check
+  const pathRecords = await runQuery(
+    `
+    MATCH path = shortestPath(
+      (a:Author {name: $authorA})-[:CO_AUTHORED*1..3]-(b:Author {name: $authorB})
+    )
+    RETURN length(path) AS hops,
+           [node IN nodes(path) | node.name] AS authorChain
+    LIMIT 1
+    `,
+    { authorA, authorB }
+  );
+
+  const direct = directRecords[0];
+  const path = pathRecords[0];
+
+  res.json({
+    authorA,
+    authorB,
+    direct_collaboration: !!direct,
+    shared_papers: direct ? toNum(direct.get('sharedPapers')) : 0,
+    shortest_path_hops: path ? toNum(path.get('hops')) : null,
+    author_chain: path ? path.get('authorChain') : null,
+    conflict_level: direct
+      ? 'HIGH'
+      : (path && toNum(path.get('hops')) <= 2 ? 'MEDIUM' : 'NONE'),
+    source: 'neo4j',
+  });
+});
+
+const getTopFirstAuthors = asyncHandler(async (req, res) => {
+  guardNeo4j();
+  const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+
+  const records = await runQuery(
+    `
+    MATCH (a:Author)-[:FIRST_AUTHORED]->(p:Paper)
+    WITH a, COUNT(DISTINCT p) AS firstCount
+    ORDER BY firstCount DESC
+    LIMIT $limit
+    MATCH (a)-[:WROTE]->(pAll:Paper)
+    RETURN a.name AS author,
+           firstCount,
+           COUNT(DISTINCT pAll) AS totalCount
+    ORDER BY firstCount DESC
+    `,
+    { limit: neo4jInt(limit) }
+  );
+
+  const authors = records.map(r => {
+    const name = r.get('author');
+    const firstCount = toNum(r.get('firstCount'));
+    const totalCount = toNum(r.get('totalCount'));
+    return {
+      name,
+      displayName: cleanAuthorDisplayName(name),
+      firstAuthoredCount: firstCount,
+      totalPaperCount: totalCount,
+      leadershipRatio: totalCount > 0 ? Math.round((firstCount / totalCount) * 100) / 100 : 0,
+    };
+  });
+
+  res.json({
+    authors,
+    source: 'neo4j',
+    note: 'leadershipRatio = first_authored / total_papers. Optimized single-query lookup.',
+  });
+});
+
+const findResearchPath = asyncHandler(async (req, res) => {
+  guardNeo4j();
+  const { from, to } = req.query;
+
+  if (!from || !to) {
+    throw new AppError('Both "from" and "to" author names are required.', 400, 'MISSING_PARAM');
+  }
+  if (from === to) {
+    return res.json({ from, to, hops: 0, path: [from], source: 'neo4j' });
+  }
+
+  const records = await runQuery(
+    `
+    MATCH path = shortestPath(
+      (a:Author {name: $from})-[:CO_AUTHORED*1..6]-(b:Author {name: $to})
+    )
+    RETURN length(path) AS hops,
+           [node IN nodes(path) | node.name] AS authorNames,
+           [rel IN relationships(path) | rel.shared_papers] AS sharedPapersAlongPath
+    `,
+    { from, to }
+  );
+
+  if (!records.length) {
+    return res.json({
+      from,
+      to,
+      hops: null,
+      path: [],
+      connected: false,
+      message: 'No collaboration path found within 6 hops.',
+      source: 'neo4j',
+    });
+  }
+
+  const r = records[0];
+  res.json({
+    from,
+    to,
+    hops: toNum(r.get('hops')),
+    path: r.get('authorNames'),
+    shared_papers_along_path: (r.get('sharedPapersAlongPath') || []).map(toNum),
+    connected: true,
+    source: 'neo4j',
+    use_case: 'Academic six-degrees of separation. Useful for finding indirect collaborators.',
+  });
+});
+
+const getAuthorFirstAuthoredPapers = asyncHandler(async (req, res) => {
+  guardNeo4j();
+  const { name } = req.params;
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+  const records = await runQuery(
+    `
+    MATCH (a:Author {name: $name})-[:FIRST_AUTHORED]->(p:Paper)
+    WITH DISTINCT p
+    OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(j:Journal)
+    OPTIONAL MATCH (p)-[:PUBLISHED_YEAR]->(y:Year)
+    RETURN p.paper_id AS id, p.title AS title,
+           j.name AS journal, y.value AS year,
+           j.best_quartile AS quartile
+    ORDER BY year DESC
+    LIMIT $limit
+    `,
+    { name, limit: neo4jInt(limit) }
+  );
+
+  const papers = records.map(r => ({
+    id: r.get('id'),
+    title: r.get('title'),
+    journal: r.get('journal'),
+    year: toNum(r.get('year')),
+    quartile: r.get('quartile'),
+  }));
+
+  res.json({
+    author: name,
+    first_authored_papers: papers,
+    count: papers.length,
+    source: 'neo4j',
+  });
+});
+
+const getCollaborationLeaderboard = asyncHandler(async (req, res) => {
+  guardNeo4j();
+  const limit = Math.min(parseInt(req.query.limit) || 15, 50);
+
+  const records = await runQuery(
+    `
+    MATCH (a:Author)-[r:CO_AUTHORED]-(collaborator:Author)
+    WITH a, COUNT(DISTINCT collaborator) AS uniqueCollaborators,
+         SUM(r.shared_papers) AS totalSharedPapers
+    ORDER BY uniqueCollaborators DESC
+    LIMIT $limit
+    RETURN a.name AS author,
+           uniqueCollaborators,
+           totalSharedPapers
+    `,
+    { limit: neo4jInt(limit) }
+  );
+
+  const leaderboard = records.map((r, i) => ({
+    rank: i + 1,
+    name: r.get('author'),
+    displayName: cleanAuthorDisplayName(r.get('author')),
+    uniqueCollaborators: toNum(r.get('uniqueCollaborators')),
+    totalSharedPapers: toNum(r.get('totalSharedPapers')),
+  }));
+
+  res.json({
+    leaderboard,
+    source: 'neo4j',
+    note: 'Ranked by number of unique co-authors. High score = research hub.',
+  });
+});
+
+const getJournalImpactNetwork = asyncHandler(async (req, res) => {
+  guardNeo4j();
+  const { journal } = req.params;
+  const limit = Math.min(parseInt(req.query.limit) || 10, 30);
+
+  // Top authors in this journal
+  const authorRecords = await runQuery(
+    `
+    MATCH (a:Author)-[:WROTE]->(p:Paper)-[:PUBLISHED_IN]->(j:Journal)
+    WHERE toLower(j.name) CONTAINS toLower($journal)
+    RETURN a.name AS author,
+           COUNT(DISTINCT p) AS papers,
+           j.name AS journalName,
+           j.best_quartile AS quartile,
+           j.sjr_index AS sjrIndex
+    ORDER BY papers DESC
+    LIMIT $limit
+    `,
+    { journal, limit: neo4jInt(limit) }
+  );
+
+  // Other journals these authors publish in (cross-journal activity)
+  const crossJournalRecords = await runQuery(
+    `
+    MATCH (a:Author)-[:WROTE]->(p:Paper)-[:PUBLISHED_IN]->(j:Journal)
+    WHERE toLower(j.name) CONTAINS toLower($journal)
+    WITH COLLECT(DISTINCT a) AS authors
+    UNWIND authors AS a
+    MATCH (a)-[:WROTE]->(p2:Paper)-[:PUBLISHED_IN]->(j2:Journal)
+    WHERE NOT toLower(j2.name) CONTAINS toLower($journal)
+    RETURN j2.name AS relatedJournal,
+           j2.best_quartile AS quartile,
+           COUNT(DISTINCT p2) AS paperCount
+    ORDER BY paperCount DESC
+    LIMIT $limit
+    `,
+    { journal, limit: neo4jInt(limit) }
+  );
+
+  res.json({
+    journal,
+    top_authors: authorRecords.map(r => ({
+      name: r.get('author'),
+      papers: toNum(r.get('papers')),
+      journalName: r.get('journalName'),
+      quartile: r.get('quartile'),
+      sjrIndex: r.get('sjrIndex') ? Number(r.get('sjrIndex')) : null,
+    })),
+    cross_journal_activity: crossJournalRecords.map(r => ({
+      journal: r.get('relatedJournal'),
+      quartile: r.get('quartile'),
+      paperCount: toNum(r.get('paperCount')),
+    })),
+    source: 'neo4j',
+  });
+});
+
+const getSourceDistribution = asyncHandler(async (req, res) => {
+  guardNeo4j();
+
+  const records = await runQuery(`
+    MATCH (p:Paper)-[:FROM_SOURCE]->(s:Source)
+    OPTIONAL MATCH (p)-[:PUBLISHED_YEAR]->(y:Year)
+    RETURN s.name AS source,
+           COUNT(DISTINCT p) AS paperCount,
+           MIN(y.value) AS earliestYear,
+           MAX(y.value) AS latestYear
+    ORDER BY paperCount DESC
+  `);
+
+  const data = records.map(r => ({
+    source: r.get('source'),
+    paperCount: toNum(r.get('paperCount')),
+    earliestYear: toNum(r.get('earliestYear')),
+    latestYear: toNum(r.get('latestYear')),
+  }));
+
+  const total = data.reduce((sum, d) => sum + d.paperCount, 0);
+  const enriched = data.map(d => ({
+    ...d,
+    percentage: total > 0 ? Math.round((d.paperCount / total) * 10000) / 100 : 0,
+  }));
+
+  res.json({ sources: enriched, totalPapers: total, source: 'neo4j' });
+});
+
 // ── HEALTH ────────────────────────────────────────────────────────────────────
 const getHealth = asyncHandler(async (req, res) => {
   if (!isNeo4jConnected()) {
@@ -436,4 +732,12 @@ module.exports = {
   searchAuthors,
   checkConflictOfInterest,
   getHealth,
+  // new
+  getTopFirstAuthors,
+  getAuthorFirstAuthoredPapers,
+  getAuthorCollaborationStrength,
+  findResearchPath,
+  getCollaborationLeaderboard,
+  getJournalImpactNetwork,
+  getSourceDistribution,
 };

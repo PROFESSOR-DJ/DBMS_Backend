@@ -30,7 +30,7 @@ const connectNeo4j = async () => {
 
 const getNeo4jSession = () => {
   if (!driver) throw new Error('Neo4j driver not initialised. Call connectNeo4j() first.');
-  return driver.session({ database: process.env.NEO4J_DATABASE || 'research-graph' });
+  return driver.session({ database: process.env.NEO4J_DATABASE || 'research-graph2' });
 };
 
 const isNeo4jConnected = () => !!driver;
@@ -44,6 +44,24 @@ const runQuery = async (cypher, params = {}) => {
   } finally {
     await session.close();
   }
+};
+
+/**
+ * Helper to convert Neo4j Integers to JS numbers throughout a result set.
+ * Returns a new object/array with Integers converted.
+ */
+const toJS = (data) => {
+  if (data === null || data === undefined) return data;
+  if (neo4j.isInt(data)) return data.toNumber();
+  if (Array.isArray(data)) return data.map(toJS);
+  if (typeof data === 'object') {
+    const res = {};
+    for (const key in data) {
+      res[key] = toJS(data[key]);
+    }
+    return res;
+  }
+  return data;
 };
 
 

@@ -181,9 +181,8 @@ const getDashboardGraphHighlights = async () => {
   `);
 
   const collaboratorRecords = await runQuery(`
-    MATCH (a:Author)-[:WROTE]->(p:Paper)<-[:WROTE]-(co:Author)
-    WHERE a.name <> co.name
-    WITH a.name AS author, count(DISTINCT p) AS collaboration_score
+    MATCH (a:Author)-[r:CO_AUTHORED]-(co:Author)
+    WITH a.name AS author, SUM(r.shared_papers) AS collaboration_score
     RETURN author, collaboration_score
     ORDER BY collaboration_score DESC, author ASC
     LIMIT 5
@@ -426,7 +425,7 @@ const getAuthorStats = asyncHandler(async (req, res) => {
 });
 
 // GET /stats/author-track/:name
-// Calls stored procedure GetAuthorTrackRecord(author_name).
+// Optimized: Fetches metrics from MySQL and co-authors from Neo4j in parallel.
 const getAuthorTrackRecord = asyncHandler(async (req, res) => {
   const authorName = String(req.query.name || req.params.name || '')
     .trim()
@@ -436,21 +435,40 @@ const getAuthorTrackRecord = asyncHandler(async (req, res) => {
     throw new AppError('Author name must be at least 2 characters.', 400, 'MISSING_PARAM');
   }
 
-  let trackRecord = null;
-  try {
-    const pool = getMySQL();
-    const [rows] = await pool.execute('CALL GetAuthorTrackRecord(?)', [authorName]);
-    trackRecord = rows[0]?.[0] || null;
-  } catch (err) {
-    throw classifyError(err);
+  const [trackRecordResult, coAuthorResult] = await Promise.all([
+    (async () => {
+      const pool = getMySQL();
+      const [rows] = await pool.execute('CALL GetAuthorTrackRecord(?)', [authorName]);
+      return rows[0]?.[0] || null;
+    })(),
+    (async () => {
+      if (!isNeo4jConnected()) return null;
+      try {
+        const records = await runQuery(
+          `MATCH (a:Author {name: $name})-[r:CO_AUTHORED]-(co:Author)
+           RETURN co.name AS coauthor
+           ORDER BY r.shared_papers DESC
+           LIMIT 15`,
+          { name: authorName }
+        );
+        return records.map(r => r.get('coauthor')).join(', ');
+      } catch (err) {
+        console.error('Neo4j track-record co-author error:', err.message);
+        return null;
+      }
+    })()
+  ]);
+
+  if (trackRecordResult) {
+    trackRecordResult.co_authors = coAuthorResult || 'No significant collaborators found in graph';
   }
 
   res.json({
     author: authorName,
-    track_record: trackRecord,
-    source: 'mysql',
+    track_record: trackRecordResult,
+    source: 'hybrid (mysql+neo4j)',
     procedure: 'GetAuthorTrackRecord',
-    query_pattern: 'CALL GetAuthorTrackRecord(?)',
+    optimisation: 'Co-authors offloaded to Neo4j graph traversal'
   });
 });
 

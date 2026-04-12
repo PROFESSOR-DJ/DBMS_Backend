@@ -14,7 +14,6 @@ class PaperDocument {
     }
   }
 
-  
   async create(paper) {
     const collection = this.getCollection();
     
@@ -30,6 +29,8 @@ class PaperDocument {
       sha: paper.sha || '',
       source: paper.source || 'manual',
       year: typeof paper.year === 'number' ? paper.year : new Date().getFullYear(),
+      is_important: Boolean(paper.is_important),
+      author_count: parseInt(paper.author_count, 10) || 0,
       ...(paper.citation_count && { citation_count: paper.citation_count }),
       ...(paper.keywords && { keywords: paper.keywords }),
       ...(paper.created_at && { created_at: paper.created_at }),
@@ -40,7 +41,6 @@ class PaperDocument {
     return result;
   }
 
-  
   async findAll(limit = 100, skip = 0, sortBy = 'recent') {
     const collection = this.getCollection();
     
@@ -59,27 +59,21 @@ class PaperDocument {
     return cursor.toArray();
   }
 
-  
-  
   async findById(id) {
     const collection = this.getCollection();
 
-    
     let paper = await collection.findOne({ paper_id: id });
     if (paper) return paper;
 
-    
     if (ObjectId.isValid(id)) {
       paper = await collection.findOne({ _id: new ObjectId(id) });
       if (paper) return paper;
     }
 
-    
     paper = await collection.findOne({ paper_id: { $regex: `^${id}$`, $options: 'i' } });
     return paper || null;
   }
 
-  
   async advancedSearch(params) {
     const collection = this.getCollection();
     const {
@@ -94,10 +88,15 @@ class PaperDocument {
       doi,
       limit = 20,
       offset = 0,
-      sortBy = 'relevance'
+      sortBy = 'relevance',
+      highlyCollaborative = false
     } = params;
 
     const filter = {};
+
+    if (highlyCollaborative) {
+      filter.is_important = true;
+    }
 
     if (yearFrom || yearTo) {
       filter.year = {};
@@ -220,7 +219,6 @@ class PaperDocument {
     return { papers, total: safeOffset + papers.length + (papers.length === safeLimit ? 1 : 0) };
   }
 
-  
   async searchText(query, limit = 50) {
     const collection = this.getCollection();
     try {

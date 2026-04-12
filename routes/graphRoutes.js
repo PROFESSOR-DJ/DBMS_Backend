@@ -19,4 +19,27 @@ router.get('/author-network/:name',    neo4jCtrl.getAuthorNetwork);
 router.get('/author-papers/:name',     neo4jCtrl.getAuthorPapers);
 router.get('/journal-authors/:journal', neo4jCtrl.getJournalAuthors);
 
+// ── New routes using CO_AUTHORED and FIRST_AUTHORED ──────────────────────────
+
+// Research leadership — authors ranked by first-authored papers
+router.get('/top-first-authors', neo4jCtrl.getTopFirstAuthors);
+
+// First-authored papers for a specific author
+router.get('/author-first-papers/:name', neo4jCtrl.getAuthorFirstAuthoredPapers);
+
+// Direct collaboration strength between two authors using CO_AUTHORED
+router.get('/collaboration-strength', neo4jCtrl.getAuthorCollaborationStrength);
+
+// Shortest collaboration path between two researchers
+router.get('/research-path', neo4jCtrl.findResearchPath);
+
+// Collaboration leaderboard — most connected researchers
+router.get('/collaboration-leaderboard', neo4jCtrl.getCollaborationLeaderboard);
+
+// Journal impact network — cross-journal patterns
+router.get('/journal-network/:journal', neo4jCtrl.getJournalImpactNetwork);
+
+// Source distribution with year range
+router.get('/source-distribution', neo4jCtrl.getSourceDistribution);
+
 module.exports = router;

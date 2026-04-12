@@ -1,101 +1,54 @@
-// paperController handles backend paper CRUD and lookup requests.
-// Trigger interactions:
-//   trg_validate_paper        — BEFORE INSERT on papers: rejects title < 5 chars
-//   trg_after_paper_insert    — AFTER INSERT on papers: creates paper_metrics row
-//   trg_update_journal_count  — AFTER INSERT on papers: increments journals.paper_count
-//   trg_mark_important_paper  — AFTER INSERT on paper_metrics: sets is_important when author_count >= 5
-//   trg_after_paper_authors_insert/delete — sync paper_metrics.author_count
-//   trg_before_author_delete  — guard against deleting linked authors (handled in authorController)
-//
-// CONSISTENCY NOTE:
-//   trg_update_journal_count fires only on INSERT.  The paperModel.delete() method
-//   therefore recomputes and writes back journals.paper_count after every deletion
-//   so the Journals page and journal-popularity endpoint stay accurate.
-//
-//   Neo4j WROTE/PUBLISHED_IN relationship counts use DISTINCT in Cypher queries
-//   (see neo4jController.js) so stale duplicate edges from past bulk-imports do
-//   not inflate author or journal paper counts.
-
-const PaperModel       = require('../models/mysql/paperModel');
-const AuthorModel      = require('../models/mysql/authorModel');
-const PaperAuthorModel = require('../models/mysql/paperAuthorModel');
-const PaperDocument    = require('../models/mongodb/paperModel');
-const DatabaseRouter   = require('../config/databaseRouter');
+// paperController handles incoming paper-related HTTP requests.
+const asyncHandler = require('../middleware/asyncHandler');
+const { AppError, classifyError } = require('../middleware/errorHandler');
+const PaperModel = require('../models/mysql/paperModel');
+const paperDocument = require('../models/mongodb/paperModel');
 const { syncPaperToGraph, removePaperFromGraph } = require('../services/graphSyncService');
-const { AppError, classifyError, asyncHandler } = require('../utils/errorHandler');
 
-const paperDocument = new PaperDocument();
+// ── UTILS ───────────────────────────────────────────────────────────────────
 
-const getPaperIdentifier = (paper) => {
-  if (!paper) return null;
-  return String(paper.paper_id || paper._id || '').trim() || null;
+const isHighlyCollaborativeEnabled = (val) => val === 'true' || val === true;
+
+const hasListFilters = (f) => f.yearFrom || f.yearTo || f.journal || f.author || f.highlyCollaborative;
+
+const normalisePaperPayload = (b) => ({
+  paper_id:      String(b.paper_id || '').trim(),
+  title:         String(b.title || '').trim(),
+  abstract:      String(b.abstract || '').trim(),
+  year:          parseInt(b.year || b.publish_year, 10),
+  doi:           String(b.doi || '').trim(),
+  journal:       String(b.journal || b.journal_name || '').trim(),
+  authors:       Array.isArray(b.authors) ? b.authors : [],
+  is_covid19:    Boolean(b.is_covid19),
+  has_full_text: Boolean(b.has_full_text),
+});
+
+const enrichSinglePaperWithSqlFlags = async (paper) => {
+  if (!paper?.paper_id) return paper;
+  const flags = await PaperModel.getPaperFlags(paper.paper_id);
+  return {
+    ...paper,
+    is_important: flags?.is_important || false,
+    author_count: flags?.author_count || paper.authors?.length || 0,
+  };
 };
 
-const enrichPapersWithSqlFlags = async (papers) => {
-  if (!Array.isArray(papers) || papers.length === 0) {
-    return papers;
-  }
+const enrichPapersWithSqlFlags = async (papers = []) => {
+  if (!papers.length) return [];
+  const ids = papers.map(p => p.paper_id);
+  const flagMap = await PaperModel.getFlagsByPaperIds(ids);
 
-  const flagsByPaperId = await PaperModel.getFlagsByPaperIds(
-    papers.map(getPaperIdentifier)
-  );
-
-  return papers.map((paper) => {
-    const paperId = getPaperIdentifier(paper);
-    const sqlFlags = paperId ? flagsByPaperId.get(paperId) : null;
-
-    if (!sqlFlags) {
-      return paper;
-    }
-
+  return papers.map(p => {
+    const flags = flagMap.get(String(p.paper_id));
     return {
-      ...paper,
-      paper_id: paper.paper_id || paperId,
-      is_important: sqlFlags.is_important,
-      author_count: sqlFlags.author_count ?? paper.author_count,
+      ...p,
+      is_important: flags?.is_important || false,
+      author_count: flags?.author_count || p.authors?.length || 0,
     };
   });
 };
 
-const enrichSinglePaperWithSqlFlags = async (paper) => {
-  if (!paper) {
-    return paper;
-  }
-
-  const [enrichedPaper] = await enrichPapersWithSqlFlags([paper]);
-  return enrichedPaper;
-};
-
-const isHighlyCollaborativeEnabled = (value) =>
-  value === true || value === 'true' || value === '1' || value === 1;
-
-const hasListFilters = ({ yearFrom, yearTo, journal, author, highlyCollaborative }) =>
-  Boolean(yearFrom || yearTo || journal || author || highlyCollaborative);
-
-const normalisePaperPayload = (paper = {}) => ({
-  ...paper,
-  paper_id: String(paper.paper_id || '').trim(),
-  title: String(paper.title || '').trim(),
-  abstract: paper.abstract ? String(paper.abstract).trim() : '',
-  year: paper.year !== undefined && paper.year !== null && paper.year !== ''
-    ? Number.parseInt(paper.year, 10)
-    : null,
-  doi: paper.doi ? String(paper.doi).trim() : '',
-  journal: paper.journal ? String(paper.journal).trim() : '',
-  source: paper.source ? String(paper.source).trim() : 'manual',
-  authors: Array.isArray(paper.authors)
-    ? paper.authors
-        .map((author) => String(author || '').trim())
-        .filter(Boolean)
-        .filter((author, index, list) => list.indexOf(author) === index)
-    : [],
-  is_covid19: Boolean(paper.is_covid19),
-  has_full_text: Boolean(paper.has_full_text),
-});
-
 const rollbackMongoPaperCreate = async (paperId) => {
-  if (!paperId) return;
-
   try {
     await paperDocument.delete(paperId);
   } catch (error) {
@@ -125,42 +78,31 @@ const getAllPapers = asyncHandler(async (req, res) => {
   const author = req.query.author || null;
   const highlyCollaborative = isHighlyCollaborativeEnabled(req.query.highlyCollaborative);
 
-  if (hasListFilters({ yearFrom, yearTo, journal, author, highlyCollaborative })) {
-    const result = await PaperModel.advancedSearch({
-      query: null,
-      yearFrom,
-      yearTo,
-      journal,
-      author,
-      limit,
-      offset,
-      sortBy,
-      highlyCollaborative,
-    });
+  // Unified logic: MongoDB handles all filtering and searching for papers
+  const result = await paperDocument.advancedSearch({
+    query: null,
+    yearFrom,
+    yearTo,
+    journal,
+    author,
+    limit,
+    offset,
+    sortBy,
+    highlyCollaborative,
+  });
 
-    return res.json({
-      papers: result.papers,
-      pagination: {
-        page,
-        limit,
-        total: result.total,
-        pages: Math.ceil(result.total / limit),
-      },
-      source: 'mysql',
-      reason: 'MySQL provides accurate server-side filtering for range, tags, and collaboration flags',
-    });
-  }
-
-  const mongoPapers = await paperDocument.findAll(limit, offset, sortBy);
-  const papers = await enrichPapersWithSqlFlags(mongoPapers);
-  const stats  = await paperDocument.getStats();
-  const total  = stats.totalPapers || 0;
+  const papers = await enrichPapersWithSqlFlags(result.papers);
 
   res.json({
     papers,
-    pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    pagination: {
+      page,
+      limit,
+      total: result.total,
+      pages: Math.ceil(result.total / limit),
+    },
     source: 'mongodb',
-    reason: 'MongoDB for flexible schema and fast retrieval of large-scale data',
+    reason: 'MongoDB for flexible schema and optimized filter search',
   });
 });
 
@@ -212,22 +154,7 @@ const searchPapers = asyncHandler(async (req, res) => {
     highlyCollaborative,
   };
 
-  if (highlyCollaborative) {
-    const result = await PaperModel.advancedSearch(searchParams);
-
-    return res.json({
-      papers: result.papers,
-      count:  result.papers.length,
-      total:  result.total,
-      pagination: {
-        page, limit, total: result.total,
-        pages: Math.ceil(result.total / limit),
-      },
-      source: 'mysql',
-      reason: 'MySQL search keeps trigger-backed collaboration filtering and totals consistent',
-    });
-  }
-
+  // Unified logic: always use MongoDB for searching, with SQL enrichment for flags
   const result = await paperDocument.advancedSearch(searchParams);
   const papers = await enrichPapersWithSqlFlags(result.papers);
 
@@ -364,16 +291,24 @@ const createPaper = asyncHandler(async (req, res) => {
     throw classifyError(mysqlErr);
   }
 
+  // Fetch trigger-calculated flags from MySQL to ensure MongoDB and Neo4j are synced with metrics
+  const flags = await PaperModel.getPaperFlags(paper.paper_id);
+  const paperWithFlags = {
+    ...paper,
+    is_important: flags?.is_important || false,
+    author_count: flags?.author_count || paper.authors?.length || 0,
+  };
+
   let mongoResult = { insertedId: null };
   try {
-    mongoResult = await paperDocument.create(paper);
+    mongoResult = await paperDocument.create(paperWithFlags);
   } catch (mongoErr) {
     await rollbackSqlPaperCreate(mysqlCreate);
     throw classifyError(mongoErr);
   }
 
   try {
-    await syncPaperToGraph(paper);
+    await syncPaperToGraph(paperWithFlags);
   } catch (neo4jErr) {
     await rollbackMongoPaperCreate(paper.paper_id);
     await rollbackSqlPaperCreate(mysqlCreate);
@@ -388,7 +323,7 @@ const createPaper = asyncHandler(async (req, res) => {
     message:           'Paper created successfully.',
     mongodb_insert_id: mongoResult.insertedId,
     mysql_insert_id:   mysqlCreate.result.insertId,
-    paper,
+    paper:             paperWithFlags,
     trigger_effects: {
       trg_validate_paper:       'Title length validated (>= 5 chars required)',
       trg_after_paper_insert:   'paper_metrics row auto-created',
@@ -428,9 +363,6 @@ const updatePaper = asyncHandler(async (req, res) => {
 });
 
 // ── DELETE PAPER ──────────────────────────────────────────────────────────────
-// Deletion order: MongoDB first, then MySQL (which recomputes journals.paper_count),
-// then Neo4j cleanup.  Each step is attempted even if a previous one warns, so all
-// three stores are kept in sync after a delete.
 const deletePaper = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
@@ -445,7 +377,7 @@ const deletePaper = asyncHandler(async (req, res) => {
     throw classifyError(err);
   }
 
-  // Step 2: MySQL  — paperModel.delete() also recomputes journals.paper_count
+  // Step 2: MySQL
   try {
     await PaperModel.delete(id);
   } catch (mysqlErr) {
@@ -457,7 +389,7 @@ const deletePaper = asyncHandler(async (req, res) => {
     }
   }
 
-  // Step 3: Neo4j — removes Paper node and orphaned Author/Journal/Year/Source nodes
+  // Step 3: Neo4j
   try {
     await removePaperFromGraph(id);
   } catch (neo4jErr) {
